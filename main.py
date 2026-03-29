@@ -7,7 +7,7 @@ import multiprocessing
 
 import qdarktheme
 from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon, QGuiApplication, QColor, QTextCursor, QTextCharFormat
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -168,7 +168,6 @@ class DashboardPage(QWidget):
             stats_row.addWidget(panel)
 
         self.start_btn = QPushButton("Start New Batch")
-        self.start_btn.setFixedHeight(42)
         self.start_btn.clicked.connect(self.startBatchRequested.emit)
 
         layout.addWidget(self.greeting)
@@ -243,6 +242,10 @@ class HistoryPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
 
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search by file name...")
+        self.search_input.textChanged.connect(self._filter_rows)
+
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["File", "Date", "Words Redacted", "Rejected Items"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -252,6 +255,7 @@ class HistoryPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
+        layout.addWidget(self.search_input)
         layout.addWidget(self.table)
 
     def load_entries(self, entries: list):
@@ -263,6 +267,15 @@ class HistoryPage(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(row_data["date"]))
             self.table.setItem(row, 2, QTableWidgetItem(str(row_data["words_redacted"])))
             self.table.setItem(row, 3, QTableWidgetItem(str(row_data["rejected_items"])))
+        self._filter_rows(self.search_input.text())
+
+    def _filter_rows(self, query: str):
+        term = query.strip().lower()
+        for row in range(self.table.rowCount()):
+            file_item = self.table.item(row, 0)
+            file_name = file_item.text().lower() if file_item else ""
+            hide = bool(term) and term not in file_name
+            self.table.setRowHidden(row, hide)
 
 
 class ReviewPage(QWidget):
@@ -275,6 +288,7 @@ class ReviewPage(QWidget):
     def __init__(self):
         super().__init__()
         self._approved = set()
+        self._snippets = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 20, 20, 20)
@@ -323,6 +337,7 @@ class ReviewPage(QWidget):
 
     def load_document(self, raw_text: str, snippets: list, approved_entities: set):
         self._approved = set(approved_entities)
+        self._snippets = list(snippets)
         self.text_browser.setPlainText(raw_text)
         self.entity_list.blockSignals(True)
         self.entity_list.clear()
@@ -341,6 +356,7 @@ class ReviewPage(QWidget):
             self.entity_list.addItem(item)
 
         self.entity_list.blockSignals(False)
+        self._apply_highlighting()
 
     def _on_item_changed(self, item: QListWidgetItem):
         entity = item.data(Qt.ItemDataRole.UserRole)
@@ -348,6 +364,45 @@ class ReviewPage(QWidget):
             self._approved.add(entity)
         else:
             self._approved.discard(entity)
+        self._apply_highlighting()
+
+    def _apply_highlighting(self):
+        doc = self.text_browser.document()
+        if doc is None:
+            return
+
+        approved_format = QTextCharFormat()
+        approved_format.setBackground(QColor("#f8c8d4"))  # Light pink/red
+
+        rejected_format = QTextCharFormat()
+        rejected_format.setBackground(QColor("#cdeccf"))  # Light green
+
+        clear_format = QTextCharFormat()
+        clear_format.setBackground(QColor("transparent"))
+
+        reset_cursor = QTextCursor(doc)
+        reset_cursor.setPosition(0)
+        reset_cursor.setPosition(len(doc.toPlainText()), QTextCursor.MoveMode.KeepAnchor)
+        reset_cursor.setCharFormat(clear_format)
+
+        for snippet in sorted(self._snippets, key=lambda s: s.get("start", 0), reverse=True):
+            start = snippet.get("start", None)
+            end = snippet.get("end", None)
+            text = snippet.get("text", "")
+            if start is None or end is None:
+                continue
+            if not isinstance(start, int) or not isinstance(end, int):
+                continue
+            if end <= start:
+                continue
+
+            cursor = QTextCursor(doc)
+            cursor.setPosition(max(0, start))
+            cursor.setPosition(min(len(doc.toPlainText()), end), QTextCursor.MoveMode.KeepAnchor)
+            if text in self._approved:
+                cursor.setCharFormat(approved_format)
+            else:
+                cursor.setCharFormat(rejected_format)
 
     def approved_entities(self) -> set:
         return set(self._approved)
@@ -363,11 +418,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("The Redactor")
-        self.setMinimumSize(1320, 860)
+        self.setMinimumSize(800, 600)
 
         icon_path = os.path.join(os.path.dirname(__file__), "icon.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
+
+        self._setup_responsive_window_geometry()
 
         self.config = AppConfig()
         self.audit_logger = AuditLogger()
@@ -417,6 +474,21 @@ class MainWindow(QMainWindow):
         self._wire_events()
         self._route_initial_page()
         self._refresh_dashboard_stats()
+
+    def _setup_responsive_window_geometry(self):
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(1100, 760)
+            return
+
+        available = screen.availableGeometry()
+        target_w = max(800, int(available.width() * 0.7))
+        target_h = max(600, int(available.height() * 0.7))
+        self.resize(target_w, target_h)
+
+        x = available.x() + (available.width() - target_w) // 2
+        y = available.y() + (available.height() - target_h) // 2
+        self.move(x, y)
 
     def _build_sidebar(self) -> QWidget:
         panel = QFrame()
@@ -599,7 +671,7 @@ class MainWindow(QMainWindow):
         if not item:
             return
         worker = item.get("worker")
-        if worker and worker.isRunning():
+        if worker and hasattr(worker, "cancel"):
             item["status"] = "Cancelling"
             self.batch_page.set_status(item["row"], "Cancelling")
             worker.cancel()
