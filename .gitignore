@@ -1,0 +1,30 @@
+# Environments
+venv/
+env/
+.env
+
+# PyInstaller
+dist/
+build/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Executables
+*.exe
+*.dll
+
+# Audit/Logs
+audit_data/
+*.log
+
+# Misc
+.DS_Store
+demo_data/
+*.docx
+*.pdf
