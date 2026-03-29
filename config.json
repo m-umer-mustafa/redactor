@@ -1,4 +1,18 @@
 {
   "user_name": "Omer Mustafa",
-  "default_export_path": "C:/My Stuff"
+  "default_export_path": "C:/My Stuff",
+  "confidence_threshold": 0.6,
+  "target_entities": [
+    "PERSON",
+    "LOCATION",
+    "ORGANIZATION",
+    "EMAIL_ADDRESS",
+    "PHONE_NUMBER",
+    "US_SSN"
+  ],
+  "custom_allow_list": [],
+  "redaction_style": "[REDACTED]",
+  "file_suffix": "_REDACTED",
+  "theme": "Dark Mode",
+  "max_concurrent_files": 2
 }

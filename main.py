@@ -829,7 +829,9 @@ class MainWindow(QMainWindow):
 
     def _apply_runtime_settings_from_config(self):
         theme = self.config.get_setting("theme", "Dark Mode")
-        qdarktheme.setup_theme("light" if theme == "Light Mode" else "dark")
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(qdarktheme.load_stylesheet("light" if theme == "Light Mode" else "dark"))
 
         max_threads = int(self.config.get_setting("max_concurrent_files", 2))
         self.threadpool.setMaxThreadCount(max(1, max_threads))
