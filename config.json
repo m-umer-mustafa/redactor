@@ -14,5 +14,8 @@
   "redaction_style": "[PII_TYPE]",
   "file_suffix": "_REDACTED",
   "theme": "Dark Mode",
-  "max_concurrent_files": 1
+  "max_concurrent_files": 1,
+  "total_files_redacted": 0,
+  "total_approved": 0,
+  "total_rejected": 0
 }

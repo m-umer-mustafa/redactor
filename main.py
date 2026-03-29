@@ -342,14 +342,10 @@ class BatchPage(QWidget):
 class HistoryPage(QWidget):
     deleteSelectedRequested = pyqtSignal(list)
     clearAllRequested = pyqtSignal()
-    resetStatsRequested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
-        self._confirm_armed = {
-            "clear_all": False,
-            "reset_stats": False,
-        }
+        self._confirm_armed = {"clear_all": False}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -362,7 +358,6 @@ class HistoryPage(QWidget):
         button_row = QHBoxLayout()
         self.btn_delete_selected = QPushButton("Delete Selected")
         self.btn_clear_all = QPushButton("Clear All History")
-        self.btn_reset_stats = QPushButton("Reset Dashboard Stats")
 
         self.btn_delete_selected.clicked.connect(self._request_delete_selected)
         self.btn_clear_all.clicked.connect(
@@ -373,30 +368,22 @@ class HistoryPage(QWidget):
                 action=self.clearAllRequested.emit,
             )
         )
-        self.btn_reset_stats.clicked.connect(
-            lambda: self._arm_or_execute_confirm(
-                key="reset_stats",
-                button=self.btn_reset_stats,
-                default_text="Reset Dashboard Stats",
-                action=self.resetStatsRequested.emit,
-            )
-        )
 
         button_row.addWidget(self.btn_delete_selected)
         button_row.addWidget(self.btn_clear_all)
-        button_row.addWidget(self.btn_reset_stats)
         button_row.addStretch()
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["File", "Date", "Words Redacted", "Rejected Items"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        # 5 columns: Select (checkbox), File, Date, Words Redacted, Rejected Items
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Select", "File", "Date", "Words Redacted", "Rejected Items"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
 
         layout.addWidget(self.search_input)
         layout.addLayout(button_row)
@@ -435,12 +422,15 @@ class HistoryPage(QWidget):
         button.setStyleSheet("")
 
     def get_selected_filenames(self) -> list[str]:
+        """Extract filenames from checked rows (column 0 has checkboxes)."""
         filenames = []
-        for model_index in self.table.selectionModel().selectedRows():
-            row = model_index.row()
-            file_item = self.table.item(row, 0)
-            if file_item:
-                filenames.append(file_item.text())
+        for row in range(self.table.rowCount()):
+            checkbox_item = self.table.item(row, 0)
+            if checkbox_item and checkbox_item.checkState() == Qt.CheckState.Checked:
+                # Filename is in column 1
+                file_item = self.table.item(row, 1)
+                if file_item:
+                    filenames.append(file_item.text())
         return list(dict.fromkeys(filenames))
 
     def load_entries(self, entries: list):
@@ -448,16 +438,29 @@ class HistoryPage(QWidget):
         for row_data in entries:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(row_data["file"]))
-            self.table.setItem(row, 1, QTableWidgetItem(row_data["date"]))
-            self.table.setItem(row, 2, QTableWidgetItem(str(row_data["words_redacted"])))
-            self.table.setItem(row, 3, QTableWidgetItem(str(row_data["rejected_items"])))
+
+            # Column 0: Checkbox for row selection
+            checkbox_item = QTableWidgetItem()
+            checkbox_item.setFlags(checkbox_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            checkbox_item.setCheckState(Qt.CheckState.Unchecked)
+            self.table.setItem(row, 0, checkbox_item)
+
+            # Column 1: File name
+            self.table.setItem(row, 1, QTableWidgetItem(row_data["file"]))
+            # Column 2: Date
+            self.table.setItem(row, 2, QTableWidgetItem(row_data["date"]))
+            # Column 3: Words Redacted
+            self.table.setItem(row, 3, QTableWidgetItem(str(row_data["words_redacted"])))
+            # Column 4: Rejected Items
+            self.table.setItem(row, 4, QTableWidgetItem(str(row_data["rejected_items"])))
+
         self._filter_rows(self.search_input.text())
 
     def _filter_rows(self, query: str):
         term = query.strip().lower()
         for row in range(self.table.rowCount()):
-            file_item = self.table.item(row, 0)
+            # File name is in column 1 now
+            file_item = self.table.item(row, 1)
             file_name = file_item.text().lower() if file_item else ""
             hide = bool(term) and term not in file_name
             self.table.setRowHidden(row, hide)
@@ -467,6 +470,8 @@ class SettingsView(QWidget):
     browseRequested = pyqtSignal()
     openFolderRequested = pyqtSignal()
     settings_saved_signal = pyqtSignal(dict)
+    statsResetRequested = pyqtSignal()
+    allDataClearedRequested = pyqtSignal()
 
     ENTITY_CHOICES = [
         "PERSON",
@@ -479,6 +484,11 @@ class SettingsView(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._confirm_armed = {
+            "reset_stats": False,
+            "clear_all_data": False,
+        }
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -571,6 +581,38 @@ class SettingsView(QWidget):
         self.save_btn = QPushButton("Apply & Save Settings")
         self.save_btn.clicked.connect(self._emit_saved_settings)
         form.addWidget(self.save_btn)
+
+        # Data Management Section
+        data_mgmt_label = QLabel("Data Management")
+        data_mgmt_label.setFont(QFont("Inter", 12, QFont.Weight.Bold))
+        form.addWidget(data_mgmt_label)
+
+        data_mgmt_row = QHBoxLayout()
+        self.btn_reset_stats = QPushButton("Reset Dashboard Stats")
+        self.btn_clear_all_data = QPushButton("Clear All App Data")
+
+        self.btn_reset_stats.clicked.connect(
+            lambda: self._arm_or_execute_confirm(
+                key="reset_stats",
+                button=self.btn_reset_stats,
+                default_text="Reset Dashboard Stats",
+                action=self.statsResetRequested.emit,
+            )
+        )
+        self.btn_clear_all_data.clicked.connect(
+            lambda: self._arm_or_execute_confirm(
+                key="clear_all_data",
+                button=self.btn_clear_all_data,
+                default_text="Clear All App Data",
+                action=self.allDataClearedRequested.emit,
+            )
+        )
+
+        data_mgmt_row.addWidget(self.btn_reset_stats)
+        data_mgmt_row.addWidget(self.btn_clear_all_data)
+        data_mgmt_row.addStretch()
+        form.addLayout(data_mgmt_row)
+
         form.addStretch()
 
         scroll.setWidget(body)
@@ -582,6 +624,32 @@ class SettingsView(QWidget):
     def _emit_saved_settings(self):
         payload = self.collect_values()
         self.settings_saved_signal.emit(payload)
+
+    def _arm_or_execute_confirm(self, key: str, button: QPushButton, default_text: str, action):
+        if self._confirm_armed.get(key, False):
+            self._confirm_armed[key] = False
+            self._reset_confirm_button(button, default_text)
+            action()
+            return
+
+        self._confirm_armed[key] = True
+        button.setText("Are you sure? Click again")
+        button.setStyleSheet(
+            "background-color: #8b1e1e; color: white; border: 1px solid #b33636; border-radius: 6px;"
+        )
+
+        QTimer.singleShot(3000, lambda: self._expire_confirm(key, button, default_text))
+
+    def _expire_confirm(self, key: str, button: QPushButton, default_text: str):
+        if not self._confirm_armed.get(key, False):
+            return
+        self._confirm_armed[key] = False
+        self._reset_confirm_button(button, default_text)
+
+    @staticmethod
+    def _reset_confirm_button(button: QPushButton, default_text: str):
+        button.setText(default_text)
+        button.setStyleSheet("")
 
     def collect_values(self) -> dict:
         checked_entities = [e for e, cb in self.entity_checks.items() if cb.isChecked()]
@@ -619,6 +687,8 @@ class SettingsView(QWidget):
 
         max_threads = int(config.get_setting("max_concurrent_files", 2))
         self.thread_spin.setValue(max(1, min(max_threads, self.thread_spin.maximum())))
+
+
 
 
 class ReviewPage(QWidget):
@@ -1023,10 +1093,11 @@ class MainWindow(QMainWindow):
         self.settings_page.browseRequested.connect(self._choose_default_export_path)
         self.settings_page.openFolderRequested.connect(self._open_default_export_path)
         self.settings_page.settings_saved_signal.connect(self._on_settings_saved)
+        self.settings_page.statsResetRequested.connect(self._reset_dashboard_stats)
+        self.settings_page.allDataClearedRequested.connect(self._clear_all_app_data)
 
         self.history_page.deleteSelectedRequested.connect(self._delete_selected_history)
         self.history_page.clearAllRequested.connect(self._clear_all_history)
-        self.history_page.resetStatsRequested.connect(self._reset_dashboard_stats)
 
     def _apply_performance_settings_from_config(self):
         max_threads = int(self.config.get_setting("max_concurrent_files", 2))
@@ -1101,27 +1172,26 @@ class MainWindow(QMainWindow):
         if deleted > 0:
             self.toast.show_toast(f"Deleted {deleted} history entr{'y' if deleted == 1 else 'ies'}")
         self._refresh_history()
-        self._refresh_dashboard_stats()
 
     def _clear_all_history(self):
+        """Clear entire audit log without touching dashboard stats."""
         clear_all_history()
         self.toast.show_toast("History cleared")
         self._refresh_history()
-        self._refresh_dashboard_stats()
 
     def _reset_dashboard_stats(self):
-        # If cumulative counters exist in config, reset them directly.
-        if self.config.has_cumulative_dashboard_counters():
-            self.config.reset_dashboard_counters()
-            self.dashboard_page.set_stats(0, 0, 0)
-            self.toast.show_toast("Dashboard stats reset")
-            return
-
-        # This app derives stats from audit history, so clearing history resets stats to zero.
-        clear_all_history()
+        """Reset only the dashboard counters in config.json (does NOT touch audit log)."""
+        self.config.reset_dashboard_counters()
+        self.dashboard_page.set_stats(0, 0, 0)
         self.toast.show_toast("Dashboard stats reset")
+
+    def _clear_all_app_data(self):
+        """Nuclear option: clear both audit log and dashboard counters."""
+        clear_all_history()
+        self.config.reset_dashboard_counters()
+        self.dashboard_page.set_stats(0, 0, 0)
         self._refresh_history()
-        self._refresh_dashboard_stats()
+        self.toast.show_toast("All app data cleared")
 
     def _enqueue_files(self, file_paths: list):
         valid = [p for p in file_paths if os.path.isfile(p) and p.lower().endswith((".pdf", ".docx"))]

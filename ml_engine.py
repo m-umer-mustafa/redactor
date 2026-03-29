@@ -37,6 +37,7 @@ class MLEngine:
         "ALPHANUMERIC_ID",
         "PHONE_NUMBER_FALLBACK",
         "ROBUST_ADDRESS_BLOCK",
+        "INTERNATIONAL_ADDRESS",
     ]
 
     # Accept aliases from config and normalize to Presidio entities.
@@ -80,6 +81,10 @@ class MLEngine:
         "AGREEMENT",
         "ADMISSION",
         "RECORD",
+        "INTERNAL",
+        "Q3",
+        "SSN",
+        "Post-Employment Obligations",
     ]
 
     # Keep PERSON threshold reasonable so names are not dropped.
@@ -160,6 +165,50 @@ class MLEngine:
     def _register_custom_recognizers(self, registry: RecognizerRegistry) -> None:
         recognizers = [
             PatternRecognizer(
+                supported_entity="PERSON",
+                name="person_with_initials_recognizer",
+                patterns=[
+                    Pattern(
+                        name="person_with_initials",
+                        regex=r"\b[A-Z][a-z]+\s+[A-Z]\.?\s+[A-Z][a-z]+\b",
+                        score=0.95,
+                    )
+                ],
+            ),
+            PatternRecognizer(
+                supported_entity="ORGANIZATION",
+                name="corporate_suffix_recognizer",
+                patterns=[
+                    Pattern(
+                        name="corporate_suffix",
+                        regex=r"\b[A-Z][a-zA-Z\&\-\s,]+\b\s+(?:LLC|Inc\.?|Corp\.?|LLP|GmbH|Ltd\.?)\b",
+                        score=0.95,
+                    )
+                ],
+            ),
+            PatternRecognizer(
+                supported_entity="ORGANIZATION",
+                name="medical_institution_recognizer",
+                patterns=[
+                    Pattern(
+                        name="medical_institution",
+                        regex=r"\b[A-Z][a-zA-Z\&\-\s]+\b\s+(?:Hospital|Medical Center|Clinic)\b",
+                        score=0.95,
+                    )
+                ],
+            ),
+            PatternRecognizer(
+                supported_entity="US_SSN",
+                name="ssn_masked_mock_recognizer",
+                patterns=[
+                    Pattern(
+                        name="ssn_masked_mock",
+                        regex=r"\b(?:[X\*\d]{3}-[X\*\d]{2}-\d{4})\b",
+                        score=0.85,
+                    )
+                ],
+            ),
+            PatternRecognizer(
                 supported_entity="CURRENCY_AMOUNT",
                 name="currency_amount_recognizer",
                 patterns=[
@@ -233,8 +282,8 @@ class MLEngine:
                 patterns=[
                     Pattern(
                         name="alphanumeric_id",
-                        regex=r"\b(?=[A-Za-z0-9\-]{6,12}\b)(?:[A-Za-z]+[\-]*[0-9]+|[0-9]+[\-]*[A-Za-z]+)[A-Za-z0-9\-]*\b",
-                        score=0.6,
+                        regex=r"\b(?=[A-Za-z0-9\-]{7,10}\b)(?:[A-Za-z]+[\-]*\d+|\d+[\-]*[A-Za-z]+)[A-Za-z0-9\-]*\b",
+                        score=0.8,
                     )
                 ],
                 context=["id", "passport", "employee", "number"],
@@ -256,8 +305,19 @@ class MLEngine:
                 patterns=[
                     Pattern(
                         name="robust_address",
-                        regex=r"\b\d{1,5}\s+[A-Za-z0-9\s#]{1,30}?(?:Street|St|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Ct|Court|Cir|Circle|Way|Terrace|Ter|Apt|Suite)\b(?:[\s,A-Za-z0-9#]{1,20}?)\b[A-Z]{2}\b\s+\d{5}\b",
-                        score=0.7,
+                        regex=r"\b\d{1,5}\s+(?:[A-Za-z0-9\#]+\s+){1,5}(?:Street|St|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Ct|Court|Cir|Circle|Way|Terrace|Ter|Apt|Suite)[a-zA-Z0-9\s,&#\.\-]+?\b[A-Z]{2,15}\b\s+\d{5}(?:-\d{4})?\b",
+                        score=0.75,
+                    )
+                ],
+            ),
+            PatternRecognizer(
+                supported_entity="INTERNATIONAL_ADDRESS",
+                name="european_address_recognizer",
+                patterns=[
+                    Pattern(
+                        name="european_address",
+                        regex=r"\b[A-Z][a-zA-Z\s\-ßäöü]+\s\d{1,4},\s?\d{4,5}\s+[A-Z][a-zA-Z\s\-ßäöü]+\b",
+                        score=0.85,
                     )
                 ],
             ),
@@ -267,11 +327,13 @@ class MLEngine:
             registry.add_recognizer(recognizer)
 
     def _is_allow_list_match(self, entity_text: str) -> bool:
+        """Check if entity text matches allow-list (case-insensitive exact match)."""
         normalized = entity_text.strip().lower()
         if not normalized:
             return False
         for safe_term in self.safe_terms:
             safe = safe_term.lower()
+            # Exact match (case-insensitive) or substring match for safety
             if normalized == safe or normalized in safe or safe in normalized:
                 return True
         return False
@@ -292,6 +354,31 @@ class MLEngine:
         token = tokens[0]
         return len(token) < 3
 
+    def _apply_allow_list_postprocessing(self, results: List[RecognizerResult], text: str) -> List[RecognizerResult]:
+        """
+        Post-process results to explicitly filter against allow-list with case-insensitive matching.
+        This ensures boilerplate terms are removed even if spaCy flagged them.
+        """
+        filtered = []
+        for result in results:
+            entity_text = text[result.start:result.end]
+            
+            # Check if entity matches allow-list (case-insensitive)
+            normalized = entity_text.strip().lower()
+            is_allowed = False
+            
+            for safe_term in self.safe_terms:
+                safe_lower = safe_term.lower()
+                # Exact match preferred, but also check substring matches
+                if normalized == safe_lower or normalized in safe_lower or safe_lower in normalized:
+                    is_allowed = True
+                    break
+            
+            if not is_allowed:
+                filtered.append(result)
+        
+        return filtered
+
     def analyze_text(self, text: str) -> List[RecognizerResult]:
         if not text.strip():
             return []
@@ -304,18 +391,20 @@ class MLEngine:
             allow_list=self.safe_terms,
         )
 
+        # First pass: threshold check and fragmentation filtering
         filtered = []
         for result in results:
             entity_text = text[result.start:result.end]
 
-            if self._is_allow_list_match(entity_text):
-                continue
             if not self._passes_entity_threshold(result):
                 continue
             if result.entity_type == "PERSON" and self._is_fragmented_person_name(entity_text):
                 continue
 
             filtered.append(result)
+
+        # Second pass: explicit allow-list post-processing (case-insensitive)
+        filtered = self._apply_allow_list_postprocessing(filtered, text)
 
         filtered.sort(key=lambda x: x.start)
         return filtered
