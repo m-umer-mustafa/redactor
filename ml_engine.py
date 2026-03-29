@@ -7,6 +7,25 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 logger = logging.getLogger(__name__)
 
 class MLEngine:
+    DEFAULT_TARGET_ENTITIES = [
+        "PERSON",
+        "LOCATION",
+        "ORGANIZATION",
+        "EMAIL_ADDRESS",
+        "PHONE_NUMBER",
+        "US_SSN",
+        "MASKED_US_SSN",
+        "IBAN_CODE",
+        "CREDIT_CARD",
+        "ACCOUNT_ENDING",
+        "CURRENCY_AMOUNT",
+        "MONEY",
+        "FACILITY",
+        "PRODUCT",
+        "STREET_ADDRESS",
+        "US_ZIP_CODE",
+    ]
+
     SAFE_LEGAL_TERMS = [
         "Confidential Settlement and Release Agreement",
         "Post-Employment Obligations",
@@ -25,13 +44,24 @@ class MLEngine:
         "PRODUCT": 0.85,
     }
 
-    def __init__(self, use_transformer: bool = False):
+    def __init__(
+        self,
+        use_transformer: bool = False,
+        confidence_threshold: float = 0.6,
+        target_entities: List[str] | None = None,
+        custom_allow_list: List[str] | None = None,
+    ):
         """
         Initializes the fully local NLP engine for PII detection.
         We default to the Large model (en_core_web_lg) for high accuracy and speed 
         without PyTorch DLL dependencies on Windows.
         """
         self.model_name = "en_core_web_trf" if use_transformer else "en_core_web_lg"
+        self.confidence_threshold = float(confidence_threshold)
+        self.target_entities = target_entities[:] if target_entities else self.DEFAULT_TARGET_ENTITIES[:]
+        self.safe_terms = self.SAFE_LEGAL_TERMS[:] + [
+            term.strip() for term in (custom_allow_list or []) if term and term.strip()
+        ]
         
         logger.info(f"Initializing ML Engine with local model: {self.model_name}")
         
@@ -141,8 +171,7 @@ class MLEngine:
         for recognizer in custom_recognizers:
             self.analyzer.registry.add_recognizer(recognizer)
 
-    @classmethod
-    def _is_allow_list_match(cls, entity_text: str) -> bool:
+    def _is_allow_list_match(self, entity_text: str) -> bool:
         """
         Ignore exact and partial matches for safe legal boilerplate terms.
         """
@@ -150,7 +179,7 @@ class MLEngine:
         if not normalized:
             return False
 
-        for safe_term in cls.SAFE_LEGAL_TERMS:
+        for safe_term in self.safe_terms:
             safe = safe_term.lower()
             if normalized == safe:
                 return True
@@ -176,25 +205,8 @@ class MLEngine:
         results = self.analyzer.analyze(
             text=text,
             language='en',
-            entities=[
-                "PERSON",
-                "LOCATION",
-                "ORGANIZATION",
-                "EMAIL_ADDRESS",
-                "PHONE_NUMBER",
-                "US_SSN",
-                "MASKED_US_SSN",
-                "IBAN_CODE",
-                "CREDIT_CARD",
-                "ACCOUNT_ENDING",
-                "CURRENCY_AMOUNT",
-                "MONEY",
-                "FACILITY",
-                "PRODUCT",
-                "STREET_ADDRESS",
-                "US_ZIP_CODE",
-            ],
-            score_threshold=0.6 # Minimum confidence
+            entities=self.target_entities,
+            score_threshold=self.confidence_threshold,
         )
 
         filtered_results = []

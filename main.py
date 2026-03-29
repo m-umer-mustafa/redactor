@@ -6,12 +6,14 @@ import uuid
 import multiprocessing
 
 import qdarktheme
-from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool
-from PyQt6.QtGui import QFont, QIcon, QGuiApplication, QColor, QTextCursor, QTextCharFormat
+from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool, QUrl
+from PyQt6.QtGui import QFont, QIcon, QGuiApplication, QColor, QTextCursor, QTextCharFormat, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
+    QCheckBox,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -19,6 +21,12 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSizePolicy,
+    QScrollArea,
+    QSlider,
+    QComboBox,
+    QGridLayout,
+    QTextEdit,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -35,7 +43,7 @@ from ui_components import (
     RowActionWidget,
     ToastNotification,
 )
-from worker import RedactionWorker, ApplyRedactionWorker, build_default_output_path
+from worker import RedactionWorker, ApplyRedactionWorker
 
 
 if __name__ == "__main__":
@@ -81,6 +89,58 @@ class AppConfig:
 
     def set_user_name(self, name: str):
         self.data["user_name"] = name.strip()
+        self.save()
+
+    @staticmethod
+    def _fallback_export_path() -> str:
+        docs = os.path.join(os.path.expanduser("~"), "Documents")
+        if os.path.isdir(docs):
+            return os.path.join(docs, "Redacted_Exports")
+        return os.path.join(os.getcwd(), "Redacted_Exports")
+
+    def default_export_path(self) -> str:
+        path = self.data.get("default_export_path", "").strip()
+        if not path:
+            path = self._fallback_export_path()
+            self.data["default_export_path"] = path
+            self.save()
+        return path
+
+    def set_default_export_path(self, path: str):
+        self.data["default_export_path"] = path.strip()
+        self.save()
+
+    def ensure_defaults(self):
+        defaults = {
+            "default_export_path": self._fallback_export_path(),
+            "confidence_threshold": 0.6,
+            "target_entities": [
+                "PERSON",
+                "LOCATION",
+                "ORGANIZATION",
+                "EMAIL_ADDRESS",
+                "PHONE_NUMBER",
+                "US_SSN",
+            ],
+            "custom_allow_list": [],
+            "redaction_style": "[REDACTED]",
+            "file_suffix": "_REDACTED",
+            "theme": "Dark Mode",
+            "max_concurrent_files": 2,
+        }
+        changed = False
+        for key, value in defaults.items():
+            if key not in self.data:
+                self.data[key] = value
+                changed = True
+        if changed:
+            self.save()
+
+    def get_setting(self, key: str, default=None):
+        return self.data.get(key, default)
+
+    def update_settings(self, values: dict):
+        self.data.update(values)
         self.save()
 
 
@@ -199,14 +259,15 @@ class BatchPage(QWidget):
         self.dropzone.filesDropped.connect(self.filesDropped.emit)
         self.dropzone.setMinimumHeight(140)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Filename", "Status", "Progress", "Actions", "Path"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Filename", "Status", "Progress", "Actions", "Path", "FileId"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnHidden(4, True)
+        self.table.setColumnHidden(5, True)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -227,13 +288,41 @@ class BatchPage(QWidget):
         self.table.setCellWidget(row, 3, action_widget)
 
         self.table.setItem(row, 4, QTableWidgetItem(full_path))
-        return row, action_widget
+        self.table.setItem(row, 5, QTableWidgetItem(file_id))
+        return action_widget
 
-    def set_status(self, row: int, value: str):
-        self.table.item(row, 1).setText(value)
+    def _row_for_file_id(self, file_id: str) -> int:
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 5)
+            if item and item.text() == file_id:
+                return row
+        return -1
 
-    def set_progress(self, row: int, value: int):
-        self.table.item(row, 2).setText(f"{value}%")
+    def set_status(self, file_id: str, value: str):
+        row = self._row_for_file_id(file_id)
+        if row < 0:
+            return
+        status_item = self.table.item(row, 1)
+        if status_item:
+            status_item.setText(value)
+
+    def set_progress(self, file_id: str, value: int):
+        row = self._row_for_file_id(file_id)
+        if row < 0:
+            return
+        progress_item = self.table.item(row, 2)
+        if progress_item:
+            progress_item.setText(f"{value}%")
+
+    def remove_file_row(self, file_id: str):
+        row = self._row_for_file_id(file_id)
+        if row < 0:
+            return
+        action_widget = self.table.cellWidget(row, 3)
+        if action_widget:
+            action_widget.setParent(None)
+            action_widget.deleteLater()
+        self.table.removeRow(row)
 
 
 class HistoryPage(QWidget):
@@ -278,6 +367,176 @@ class HistoryPage(QWidget):
             self.table.setRowHidden(row, hide)
 
 
+class SettingsView(QWidget):
+    browseRequested = pyqtSignal()
+    openFolderRequested = pyqtSignal()
+    settings_saved_signal = pyqtSignal(dict)
+
+    ENTITY_CHOICES = [
+        "PERSON",
+        "LOCATION",
+        "ORGANIZATION",
+        "EMAIL_ADDRESS",
+        "PHONE_NUMBER",
+        "US_SSN",
+    ]
+
+    def __init__(self):
+        super().__init__()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        body = QWidget()
+        form = QVBoxLayout(body)
+        form.setContentsMargins(24, 24, 24, 24)
+        form.setSpacing(14)
+
+        title = QLabel("Settings")
+        title.setFont(QFont("Inter", 18, QFont.Weight.Bold))
+        form.addWidget(title)
+
+        det_label = QLabel("Detection Engine Tuning")
+        det_label.setFont(QFont("Inter", 12, QFont.Weight.Bold))
+        form.addWidget(det_label)
+
+        threshold_row = QHBoxLayout()
+        threshold_row.addWidget(QLabel("Confidence Threshold"))
+        self.threshold_value = QLabel("0.60")
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.threshold_slider.setRange(0, 100)
+        self.threshold_slider.setValue(60)
+        self.threshold_slider.valueChanged.connect(self._update_threshold_label)
+        threshold_row.addWidget(self.threshold_slider, 1)
+        threshold_row.addWidget(self.threshold_value)
+        form.addLayout(threshold_row)
+
+        form.addWidget(QLabel("Target Entities"))
+        entity_grid = QGridLayout()
+        self.entity_checks = {}
+        for idx, entity in enumerate(self.ENTITY_CHOICES):
+            cb = QCheckBox(entity)
+            cb.setChecked(True)
+            self.entity_checks[entity] = cb
+            entity_grid.addWidget(cb, idx // 3, idx % 3)
+        form.addLayout(entity_grid)
+
+        form.addWidget(QLabel("Custom Allow-List (comma separated)"))
+        self.allow_list_edit = QTextEdit()
+        self.allow_list_edit.setPlaceholderText("Example: Employer, Employee, Confidential Settlement and Release Agreement")
+        self.allow_list_edit.setFixedHeight(90)
+        form.addWidget(self.allow_list_edit)
+
+        exp_label = QLabel("Export Preferences")
+        exp_label.setFont(QFont("Inter", 12, QFont.Weight.Bold))
+        form.addWidget(exp_label)
+
+        path_row = QHBoxLayout()
+        self.path_input = QLineEdit()
+        self.path_input.setReadOnly(True)
+        self.path_input.setPlaceholderText("No export folder selected")
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self.browseRequested.emit)
+        open_btn = QPushButton("Open Folder")
+        open_btn.clicked.connect(self.openFolderRequested.emit)
+        path_row.addWidget(self.path_input, 1)
+        path_row.addWidget(browse_btn)
+        path_row.addWidget(open_btn)
+        form.addLayout(path_row)
+
+        style_row = QHBoxLayout()
+        style_row.addWidget(QLabel("Redaction Style"))
+        self.redaction_style_combo = QComboBox()
+        self.redaction_style_combo.addItems(["[REDACTED]", "████████", "[PII_TYPE]"])
+        style_row.addWidget(self.redaction_style_combo, 1)
+        form.addLayout(style_row)
+
+        suffix_row = QHBoxLayout()
+        suffix_row.addWidget(QLabel("File Suffix"))
+        self.file_suffix_input = QLineEdit("_REDACTED")
+        suffix_row.addWidget(self.file_suffix_input, 1)
+        form.addLayout(suffix_row)
+
+        sys_label = QLabel("System & Performance")
+        sys_label.setFont(QFont("Inter", 12, QFont.Weight.Bold))
+        form.addWidget(sys_label)
+
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("Theme"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Light Mode", "Dark Mode"])
+        theme_row.addWidget(self.theme_combo, 1)
+        form.addLayout(theme_row)
+
+        threads_row = QHBoxLayout()
+        threads_row.addWidget(QLabel("Max Concurrent Files (Threads)"))
+        self.thread_spin = QSpinBox()
+        self.thread_spin.setRange(1, max(1, os.cpu_count() or 1))
+        self.thread_spin.setValue(2)
+        threads_row.addWidget(self.thread_spin)
+        form.addLayout(threads_row)
+
+        self.save_btn = QPushButton("Apply & Save Settings")
+        self.save_btn.clicked.connect(self._emit_saved_settings)
+        form.addWidget(self.save_btn)
+        form.addStretch()
+
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+
+    def _update_threshold_label(self, _value: int = 0):
+        self.threshold_value.setText(f"{self.threshold_slider.value() / 100:.2f}")
+
+    def _emit_saved_settings(self):
+        payload = self.collect_values()
+        self.settings_saved_signal.emit(payload)
+
+    def collect_values(self) -> dict:
+        checked_entities = [e for e, cb in self.entity_checks.items() if cb.isChecked()]
+        allow_list = [x.strip() for x in self.allow_list_edit.toPlainText().split(",") if x.strip()]
+        return {
+            "confidence_threshold": round(self.threshold_slider.value() / 100.0, 2),
+            "target_entities": checked_entities,
+            "custom_allow_list": allow_list,
+            "redaction_style": self.redaction_style_combo.currentText(),
+            "file_suffix": self.file_suffix_input.text().strip() or "_REDACTED",
+            "theme": self.theme_combo.currentText(),
+            "max_concurrent_files": int(self.thread_spin.value()),
+            "default_export_path": self.path_input.text().strip(),
+        }
+
+    def set_export_path(self, path: str):
+        self.path_input.setText(path)
+
+    def load_from_config(self, config: AppConfig):
+        self.path_input.setText(config.default_export_path())
+        self.threshold_slider.setValue(int(float(config.get_setting("confidence_threshold", 0.6)) * 100))
+        self._update_threshold_label()
+
+        selected_entities = set(config.get_setting("target_entities", self.ENTITY_CHOICES))
+        for entity, cb in self.entity_checks.items():
+            cb.setChecked(entity in selected_entities)
+
+        allow_list = config.get_setting("custom_allow_list", [])
+        self.allow_list_edit.setPlainText(", ".join(allow_list))
+
+        style = config.get_setting("redaction_style", "[REDACTED]")
+        index = self.redaction_style_combo.findText(style)
+        self.redaction_style_combo.setCurrentIndex(index if index >= 0 else 0)
+
+        self.file_suffix_input.setText(config.get_setting("file_suffix", "_REDACTED"))
+
+        theme = config.get_setting("theme", "Dark Mode")
+        theme_idx = self.theme_combo.findText(theme)
+        self.theme_combo.setCurrentIndex(theme_idx if theme_idx >= 0 else 1)
+
+        max_threads = int(config.get_setting("max_concurrent_files", 2))
+        self.thread_spin.setValue(max(1, min(max_threads, self.thread_spin.maximum())))
+
+
 class ReviewPage(QWidget):
     previousRequested = pyqtSignal()
     nextRequested = pyqtSignal()
@@ -310,6 +569,25 @@ class ReviewPage(QWidget):
         top.addWidget(self.context_label)
         top.addWidget(self.back_btn)
 
+        legend = QHBoxLayout()
+        legend.setSpacing(10)
+
+        approved_chip = QLabel("Approved for Redaction")
+        approved_chip.setStyleSheet(
+            "padding: 4px 10px; border-radius: 10px; "
+            "background-color: #6f2d40; color: #ffeef2; border: 1px solid #a64764;"
+        )
+
+        rejected_chip = QLabel("Rejected (Keep)")
+        rejected_chip.setStyleSheet(
+            "padding: 4px 10px; border-radius: 10px; "
+            "background-color: #2f4a39; color: #e7f6eb; border: 1px solid #4f7d61;"
+        )
+
+        legend.addWidget(approved_chip)
+        legend.addWidget(rejected_chip)
+        legend.addStretch()
+
         body = QHBoxLayout()
         self.text_browser = QTextBrowser()
         self.entity_list = QListWidget()
@@ -329,6 +607,7 @@ class ReviewPage(QWidget):
         actions.addStretch()
 
         root.addLayout(top)
+        root.addLayout(legend)
         root.addLayout(body)
         root.addLayout(actions)
 
@@ -372,10 +651,12 @@ class ReviewPage(QWidget):
             return
 
         approved_format = QTextCharFormat()
-        approved_format.setBackground(QColor("#f8c8d4"))  # Light pink/red
+        approved_format.setBackground(QColor("#6f2d40"))
+        approved_format.setForeground(QColor("#ffeef2"))
 
         rejected_format = QTextCharFormat()
-        rejected_format.setBackground(QColor("#cdeccf"))  # Light green
+        rejected_format.setBackground(QColor("#2f4a39"))
+        rejected_format.setForeground(QColor("#e7f6eb"))
 
         clear_format = QTextCharFormat()
         clear_format.setBackground(QColor("transparent"))
@@ -414,6 +695,7 @@ class MainWindow(QMainWindow):
     PAGE_BATCH = 2
     PAGE_HISTORY = 3
     PAGE_REVIEW = 4
+    PAGE_SETTINGS = 5
 
     def __init__(self):
         super().__init__()
@@ -428,6 +710,7 @@ class MainWindow(QMainWindow):
 
         self.config = AppConfig()
         self.audit_logger = AuditLogger()
+        self.config.ensure_defaults()
 
         self.batch_items = {}
         self.batch_order = []
@@ -464,14 +747,18 @@ class MainWindow(QMainWindow):
         self.batch_page = BatchPage()
         self.history_page = HistoryPage()
         self.review_page = ReviewPage()
+        self.settings_page = SettingsView()
 
         self.stack.addWidget(self.onboarding_page)
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.batch_page)
         self.stack.addWidget(self.history_page)
         self.stack.addWidget(self.review_page)
+        self.stack.addWidget(self.settings_page)
 
         self._wire_events()
+        self.settings_page.load_from_config(self.config)
+        self._apply_runtime_settings_from_config()
         self._route_initial_page()
         self._refresh_dashboard_stats()
 
@@ -506,12 +793,14 @@ class MainWindow(QMainWindow):
         self.btn_dashboard = SidebarButton("Dashboard")
         self.btn_batch = SidebarButton("Batch Redaction")
         self.btn_history = SidebarButton("History")
+        self.btn_settings = SidebarButton("Settings")
 
         layout.addWidget(brand)
         layout.addSpacing(18)
         layout.addWidget(self.btn_dashboard)
         layout.addWidget(self.btn_batch)
         layout.addWidget(self.btn_history)
+        layout.addWidget(self.btn_settings)
         layout.addStretch()
         return panel
 
@@ -519,6 +808,7 @@ class MainWindow(QMainWindow):
         self.btn_dashboard.clicked.connect(lambda: self.navigate(self.PAGE_DASHBOARD))
         self.btn_batch.clicked.connect(lambda: self.navigate(self.PAGE_BATCH))
         self.btn_history.clicked.connect(lambda: self.navigate(self.PAGE_HISTORY))
+        self.btn_settings.clicked.connect(lambda: self.navigate(self.PAGE_SETTINGS))
 
         self.onboarding_page.completed.connect(self._complete_onboarding)
         self.dashboard_page.startBatchRequested.connect(lambda: self.navigate(self.PAGE_BATCH))
@@ -532,6 +822,17 @@ class MainWindow(QMainWindow):
         self.review_page.nextRequested.connect(lambda: self._move_review(1))
         self.review_page.applyCurrentRequested.connect(self._apply_current)
         self.review_page.applyAllRequested.connect(self._apply_all)
+
+        self.settings_page.browseRequested.connect(self._choose_default_export_path)
+        self.settings_page.openFolderRequested.connect(self._open_default_export_path)
+        self.settings_page.settings_saved_signal.connect(self._on_settings_saved)
+
+    def _apply_runtime_settings_from_config(self):
+        theme = self.config.get_setting("theme", "Dark Mode")
+        qdarktheme.setup_theme("light" if theme == "Light Mode" else "dark")
+
+        max_threads = int(self.config.get_setting("max_concurrent_files", 2))
+        self.threadpool.setMaxThreadCount(max(1, max_threads))
 
     def _route_initial_page(self):
         if self.config.user_name():
@@ -559,11 +860,43 @@ class MainWindow(QMainWindow):
             self._refresh_history()
         elif page_index == self.PAGE_REVIEW:
             self._set_nav_checked(self.btn_batch)
+        elif page_index == self.PAGE_SETTINGS:
+            self._set_nav_checked(self.btn_settings)
+            self.settings_page.load_from_config(self.config)
         self._update_banner_visibility()
 
     def _set_nav_checked(self, active_btn: QPushButton | None):
-        for btn in (self.btn_dashboard, self.btn_batch, self.btn_history):
+        for btn in (self.btn_dashboard, self.btn_batch, self.btn_history, self.btn_settings):
             btn.setChecked(btn is active_btn)
+
+    def _choose_default_export_path(self):
+        start_dir = self.config.default_export_path()
+        chosen = QFileDialog.getExistingDirectory(self, "Select Default Export Folder", start_dir)
+        if not chosen:
+            return
+        self.config.set_default_export_path(chosen)
+        self.settings_page.set_export_path(chosen)
+        self.toast.show_toast("Default save location updated")
+
+    def _on_settings_saved(self, payload: dict):
+        if not payload.get("target_entities"):
+            self.toast.show_toast("Select at least one target entity")
+            return
+
+        export_path = payload.get("default_export_path", "").strip() or self.config.default_export_path()
+        payload["default_export_path"] = export_path
+
+        self.config.update_settings(payload)
+        self.settings_page.load_from_config(self.config)
+        self._apply_runtime_settings_from_config()
+        self.toast.show_toast("Settings saved")
+
+    def _open_default_export_path(self):
+        path = self.config.default_export_path()
+        os.makedirs(path, exist_ok=True)
+        ok = QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        if not ok:
+            self.toast.show_toast("Could not open export folder")
 
     def _enqueue_files(self, file_paths: list):
         valid = [p for p in file_paths if os.path.isfile(p) and p.lower().endswith((".pdf", ".docx"))]
@@ -574,9 +907,17 @@ class MainWindow(QMainWindow):
         for path in valid:
             file_id = str(uuid.uuid4())
             name = os.path.basename(path)
-            row, action_widget = self.batch_page.add_file_row(file_id, name, path)
+            action_widget = self.batch_page.add_file_row(file_id, name, path)
 
-            worker = RedactionWorker(file_path=path, file_id=file_id)
+            worker = RedactionWorker(
+                file_path=path,
+                file_id=file_id,
+                engine_settings={
+                    "confidence_threshold": self.config.get_setting("confidence_threshold", 0.6),
+                    "target_entities": self.config.get_setting("target_entities", []),
+                    "custom_allow_list": self.config.get_setting("custom_allow_list", []),
+                },
+            )
             worker.signals.started.connect(self._on_file_started)
             worker.signals.progress.connect(self.update_file_progress)
             worker.signals.finished.connect(self.on_file_ready_for_review)
@@ -586,7 +927,6 @@ class MainWindow(QMainWindow):
                 "id": file_id,
                 "path": path,
                 "name": name,
-                "row": row,
                 "worker": worker,
                 "status": "Pending",
                 "progress": 0,
@@ -607,7 +947,7 @@ class MainWindow(QMainWindow):
         if not item:
             return
         item["status"] = status
-        self.batch_page.set_status(item["row"], status)
+        self.batch_page.set_status(file_id, status)
         self._update_banner_visibility()
 
     def _on_file_started(self, file_id: str):
@@ -622,7 +962,7 @@ class MainWindow(QMainWindow):
         if not item:
             return
         item["progress"] = progress
-        self.batch_page.set_progress(item["row"], progress)
+        self.batch_page.set_progress(file_id, progress)
         self._update_banner_visibility()
 
     def on_file_ready_for_review(self, file_id: str, payload: dict):
@@ -633,8 +973,8 @@ class MainWindow(QMainWindow):
         item["snippets"] = payload.get("snippets", [])
         item["approved_entities"] = {s.get("text", "") for s in item["snippets"] if s.get("text", "")}
         item["status"] = "Ready for Review"
-        self.batch_page.set_status(item["row"], "Ready for Review")
-        self.batch_page.set_progress(item["row"], 100)
+        self.batch_page.set_status(file_id, "Ready for Review")
+        self.batch_page.set_progress(file_id, 100)
         item["action_widget"].set_review_visible(True)
         item["action_widget"].set_cancel_enabled(False)
         self.toast.show_toast(f"Ready for review: {item['name']}")
@@ -651,7 +991,7 @@ class MainWindow(QMainWindow):
         if not item:
             return
         item["status"] = "Failed"
-        self.batch_page.set_status(item["row"], "Failed")
+        self.batch_page.set_status(file_id, "Failed")
         item["action_widget"].set_cancel_enabled(False)
         self.toast.show_toast(f"Failed: {item['name']} ({message})")
         self._update_banner_visibility()
@@ -661,20 +1001,53 @@ class MainWindow(QMainWindow):
         if not item:
             return
         item["status"] = "Cancelled"
-        self.batch_page.set_status(item["row"], "Cancelled")
+        self.batch_page.set_status(file_id, "Cancelled")
         item["action_widget"].set_cancel_enabled(False)
         self.toast.show_toast(f"Cancelled: {item['name']}")
         self._update_banner_visibility()
+
+    def _remove_batch_item(self, file_id: str):
+        item = self.batch_items.pop(file_id, None)
+        if not item:
+            return
+
+        if file_id in self.batch_order:
+            self.batch_order.remove(file_id)
+
+        self.batch_page.remove_file_row(file_id)
+
+        redaction_worker = self.redaction_workers.pop(file_id, None)
+        if redaction_worker is not None and redaction_worker.isRunning():
+            redaction_worker.requestInterruption()
+
+        if self.current_review_id == file_id:
+            self.current_review_id = None
+
+        self._sync_review_after_removal()
+        self._update_banner_visibility()
+
+    def _sync_review_after_removal(self):
+        if self.stack.currentIndex() != self.PAGE_REVIEW:
+            return
+        reviewable = self._reviewable_ids()
+        if not reviewable:
+            self.navigate(self.PAGE_BATCH)
+            return
+        if self.current_review_id not in reviewable:
+            self.current_review_id = reviewable[0]
+            self._load_review_page(self.current_review_id)
 
     def _cancel_file(self, file_id: str):
         item = self.batch_items.get(file_id)
         if not item:
             return
+
         worker = item.get("worker")
         if worker and hasattr(worker, "cancel"):
-            item["status"] = "Cancelling"
-            self.batch_page.set_status(item["row"], "Cancelling")
             worker.cancel()
+
+        self._remove_batch_item(file_id)
+        self.toast.show_toast(f"Removed: {item['name']}")
 
     def _reviewable_ids(self) -> list:
         return [
@@ -741,12 +1114,25 @@ class MainWindow(QMainWindow):
         if item["status"] in ("Redacting", "Done"):
             return
 
-        output_path = build_default_output_path(item["path"])
+        export_dir = self.config.default_export_path()
+        os.makedirs(export_dir, exist_ok=True)
+
+        original_name = os.path.basename(item["path"])
+        stem, ext = os.path.splitext(original_name)
+        suffix = self.config.get_setting("file_suffix", "_REDACTED")
+        output_path = os.path.join(export_dir, f"{stem}{suffix}{ext}")
+
+        approved_snippets = [
+            s for s in item["snippets"] if s.get("text", "") in item["approved_entities"]
+        ]
+
         worker = ApplyRedactionWorker(
             file_id=file_id,
             file_path=item["path"],
             output_path=output_path,
             approved_entities=list(item["approved_entities"]),
+            approved_snippets=approved_snippets,
+            redaction_style=self.config.get_setting("redaction_style", "[REDACTED]"),
         )
         worker.statusChanged.connect(self._on_worker_status)
         worker.finishedRedaction.connect(self._on_redaction_finished)
@@ -759,11 +1145,6 @@ class MainWindow(QMainWindow):
             return
 
         if success:
-            item["status"] = "Done"
-            self.batch_page.set_status(item["row"], "Done")
-            self.batch_page.set_progress(item["row"], 100)
-            item["action_widget"].set_cancel_enabled(False)
-
             actions = []
             approved = item["approved_entities"]
             for snippet in item["snippets"]:
@@ -782,12 +1163,13 @@ class MainWindow(QMainWindow):
             self.audit_logger.append_entry(item["name"], reviewer, actions)
             self.toast.show_toast(f"Saved: {item['name']}")
             self._refresh_dashboard_stats()
+            self._remove_batch_item(file_id)
         else:
             item["status"] = "Failed"
-            self.batch_page.set_status(item["row"], "Failed")
+            self.batch_page.set_status(file_id, "Failed")
             self.toast.show_toast(f"Save failed: {item['name']}")
 
-        if all(self.batch_items[fid]["status"] == "Done" for fid in self._reviewable_ids()):
+        if not self.batch_items:
             self.toast.show_toast("Batch complete")
 
         self._update_banner_visibility()

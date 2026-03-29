@@ -29,18 +29,35 @@ class SharedAnalyzerManager:
     _init_lock = threading.Lock()
     _analyze_lock = threading.Lock()
     _engine = None
+    _engine_key = None
+
+    @staticmethod
+    def _key_from_settings(settings: dict | None, use_transformer: bool) -> tuple:
+        cfg = settings or {}
+        entities = tuple(sorted(cfg.get("target_entities", [])))
+        allow = tuple(sorted(cfg.get("custom_allow_list", [])))
+        threshold = float(cfg.get("confidence_threshold", 0.6))
+        return (use_transformer, threshold, entities, allow)
 
     @classmethod
-    def get_engine(cls, use_transformer: bool = False) -> MLEngine:
-        if cls._engine is None:
+    def get_engine(cls, use_transformer: bool = False, settings: dict | None = None) -> MLEngine:
+        key = cls._key_from_settings(settings, use_transformer)
+        if cls._engine is None or cls._engine_key != key:
             with cls._init_lock:
-                if cls._engine is None:
-                    cls._engine = MLEngine(use_transformer=use_transformer)
+                if cls._engine is None or cls._engine_key != key:
+                    cfg = settings or {}
+                    cls._engine = MLEngine(
+                        use_transformer=use_transformer,
+                        confidence_threshold=float(cfg.get("confidence_threshold", 0.6)),
+                        target_entities=cfg.get("target_entities") or None,
+                        custom_allow_list=cfg.get("custom_allow_list") or None,
+                    )
+                    cls._engine_key = key
         return cls._engine
 
     @classmethod
-    def analyze(cls, text: str, use_transformer: bool = False):
-        engine = cls.get_engine(use_transformer=use_transformer)
+    def analyze(cls, text: str, use_transformer: bool = False, settings: dict | None = None):
+        engine = cls.get_engine(use_transformer=use_transformer, settings=settings)
         with cls._analyze_lock:
             results = engine.analyze_text(text)
             snippets = engine.get_candidate_snippets(text, results)
@@ -52,12 +69,20 @@ class RedactionWorker(QRunnable):
     QRunnable worker for extraction + PII analysis in QThreadPool.
     """
 
-    def __init__(self, file_path: str, file_id: str, analyzer_engine: MLEngine | None = None, use_transformer: bool = False):
+    def __init__(
+        self,
+        file_path: str,
+        file_id: str,
+        analyzer_engine: MLEngine | None = None,
+        use_transformer: bool = False,
+        engine_settings: dict | None = None,
+    ):
         super().__init__()
         self.file_path = file_path
         self.file_id = file_id
         self.analyzer_engine = analyzer_engine
         self.use_transformer = use_transformer
+        self.engine_settings = engine_settings or {}
         self.signals = WorkerSignals()
         self._cancel_requested = threading.Event()
 
@@ -92,7 +117,11 @@ class RedactionWorker(QRunnable):
                 results = self.analyzer_engine.analyze_text(raw_text)
                 snippets = self.analyzer_engine.get_candidate_snippets(raw_text, results)
             else:
-                results, snippets = SharedAnalyzerManager.analyze(raw_text, use_transformer=self.use_transformer)
+                results, snippets = SharedAnalyzerManager.analyze(
+                    raw_text,
+                    use_transformer=self.use_transformer,
+                    settings=self.engine_settings,
+                )
 
             if self._is_cancelled():
                 self.signals.error.emit(self.file_id, "Cancelled")
@@ -119,16 +148,32 @@ class ApplyRedactionWorker(QThread):
     statusChanged = pyqtSignal(str, str)  # file_id, status
     finishedRedaction = pyqtSignal(str, str, bool)  # file_id, output_path, success
 
-    def __init__(self, file_id: str, file_path: str, output_path: str, approved_entities: list[str]):
+    def __init__(
+        self,
+        file_id: str,
+        file_path: str,
+        output_path: str,
+        approved_entities: list[str],
+        approved_snippets: list[dict] | None = None,
+        redaction_style: str = "[REDACTED]",
+    ):
         super().__init__()
         self.file_id = file_id
         self.file_path = file_path
         self.output_path = output_path
         self.approved_entities = approved_entities
+        self.approved_snippets = approved_snippets or []
+        self.redaction_style = redaction_style
 
     def run(self):
         self.statusChanged.emit(self.file_id, "Redacting")
-        ok = Redactor.redact(self.file_path, self.output_path, self.approved_entities)
+        ok = Redactor.redact(
+            self.file_path,
+            self.output_path,
+            self.approved_entities,
+            approved_snippets=self.approved_snippets,
+            redaction_style=self.redaction_style,
+        )
         self.finishedRedaction.emit(self.file_id, self.output_path, ok)
 
 
