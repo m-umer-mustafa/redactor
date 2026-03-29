@@ -7,6 +7,24 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 logger = logging.getLogger(__name__)
 
 class MLEngine:
+    SAFE_LEGAL_TERMS = [
+        "Confidential Settlement and Release Agreement",
+        "Post-Employment Obligations",
+        "Operations",
+        "SSN",
+        "Employer",
+        "Employee",
+    ]
+
+    # Apply stricter thresholds to noisy general NER classes often over-triggered
+    # by legal title-cased boilerplate text.
+    ENTITY_MIN_SCORE = {
+        "ORGANIZATION": 0.85,
+        "PERSON": 0.85,
+        "FACILITY": 0.85,
+        "PRODUCT": 0.85,
+    }
+
     def __init__(self, use_transformer: bool = False):
         """
         Initializes the fully local NLP engine for PII detection.
@@ -68,32 +86,8 @@ class MLEngine:
                 name="masked_us_ssn_recognizer",
                 patterns=[
                     Pattern(
-                        name="masked_us_ssn_x",
-                        # Matches XXX-XX-1234 and xxx-xx-1234
-                        regex=r"\b[xX]{3}-[xX]{2}-\d{4}\b",
-                        score=0.95,
-                    ),
-                    Pattern(
-                        name="masked_us_ssn_star",
-                        # Matches ***-**-1234
-                        regex=r"\b\*{3}-\*{2}-\d{4}\b",
-                        score=0.95,
-                    ),
-                ],
-            ),
-            PatternRecognizer(
-                supported_entity="ACCOUNT_ENDING",
-                name="account_ending_recognizer",
-                patterns=[
-                    Pattern(
-                        name="ending_in_4_digits",
-                        # Matches: ending in 8391, card ending in 4092
-                        regex=r"\b(?:account|acct|card|checking\s+account|savings\s+account|credit\s+card|debit\s+card|amex|visa|mastercard)?(?:\s+\w+){0,6}\s+ending\s+(?:in|with)\s+\d{4}\b",
-                        score=0.85,
-                    ),
-                    Pattern(
-                        name="simple_ending_in_4_digits",
-                        regex=r"\bending\s+(?:in|with)\s+\d{4}\b",
+                        name="masked_ssn",
+                        regex=r"\b(?:\*|X|x){3}-(?:\*|X|x){2}-\d{4}\b",
                         score=0.8,
                     ),
                 ],
@@ -103,10 +97,20 @@ class MLEngine:
                 name="currency_amount_recognizer",
                 patterns=[
                     Pattern(
-                        name="usd_amount",
-                        # Matches: $85,000.00, $1,250, $99.99
-                        regex=r"(?<!\w)\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b",
-                        score=0.85,
+                        name="currency_dollar_amount",
+                        regex=r"\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b",
+                        score=0.8,
+                    ),
+                ],
+            ),
+            PatternRecognizer(
+                supported_entity="ACCOUNT_ENDING",
+                name="account_ending_recognizer",
+                patterns=[
+                    Pattern(
+                        name="account_or_card_ending",
+                        regex=r"\b(?:ending in|account|card)\s+\d{4}\b",
+                        score=0.8,
                     ),
                 ],
             ),
@@ -115,10 +119,9 @@ class MLEngine:
                 name="street_address_recognizer",
                 patterns=[
                     Pattern(
-                        name="us_street_address_line",
-                        # Matches: 742 Evergreen Terrace
-                        regex=r"\b\d{1,6}\s+(?:[A-Za-z0-9'\.-]+\s+){1,6}(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Terrace|Ter|Place|Pl|Parkway|Pkwy)\b",
-                        score=0.75,
+                        name="basic_us_street_address",
+                        regex=r"\b\d+\s+[A-Za-z0-9\s\.\-]+?(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Lane|Ln|Drive|Dr|Court|Ct|Circle|Cir|Terrace|Ter|Way)\b",
+                        score=0.6,
                     ),
                 ],
             ),
@@ -127,15 +130,9 @@ class MLEngine:
                 name="us_zip_code_recognizer",
                 patterns=[
                     Pattern(
-                        name="zip_after_state",
-                        # Matches: IL 62704 / CA 94107 / NY 10001-1234
-                        regex=r"\b(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}(?:-\d{4})?\b",
-                        score=0.8,
-                    ),
-                    Pattern(
-                        name="standalone_zip",
+                        name="us_zip_code",
                         regex=r"\b\d{5}(?:-\d{4})?\b",
-                        score=0.65,
+                        score=0.6,
                     ),
                 ],
             ),
@@ -143,6 +140,28 @@ class MLEngine:
 
         for recognizer in custom_recognizers:
             self.analyzer.registry.add_recognizer(recognizer)
+
+    @classmethod
+    def _is_allow_list_match(cls, entity_text: str) -> bool:
+        """
+        Ignore exact and partial matches for safe legal boilerplate terms.
+        """
+        normalized = entity_text.strip().lower()
+        if not normalized:
+            return False
+
+        for safe_term in cls.SAFE_LEGAL_TERMS:
+            safe = safe_term.lower()
+            if normalized == safe:
+                return True
+            if normalized in safe or safe in normalized:
+                return True
+        return False
+
+    @classmethod
+    def _passes_entity_threshold(cls, result: RecognizerResult) -> bool:
+        min_score = cls.ENTITY_MIN_SCORE.get(result.entity_type, 0.6)
+        return result.score >= min_score
 
     def analyze_text(self, text: str) -> List[RecognizerResult]:
         """
@@ -177,10 +196,22 @@ class MLEngine:
             ],
             score_threshold=0.6 # Minimum confidence
         )
+
+        filtered_results = []
+        for result in results:
+            entity_text = text[result.start:result.end]
+
+            if self._is_allow_list_match(entity_text):
+                continue
+
+            if not self._passes_entity_threshold(result):
+                continue
+
+            filtered_results.append(result)
         
         # Sort by start position for easier handling
-        results.sort(key=lambda x: x.start)
-        return results
+        filtered_results.sort(key=lambda x: x.start)
+        return filtered_results
 
     def get_candidate_snippets(self, text: str, results: List[RecognizerResult], context_chars: int = 30) -> List[Dict[str, Any]]:
         """
