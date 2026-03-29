@@ -71,6 +71,15 @@ class MLEngine:
         "Premises",
         "Security",
         "Clinical",
+        "Email",
+        "IBAN",
+        "Passport",
+        "Number",
+        "CONFIDENTIAL",
+        "SETTLEMENT",
+        "AGREEMENT",
+        "ADMISSION",
+        "RECORD",
     ]
 
     # Keep PERSON threshold reasonable so names are not dropped.
@@ -178,8 +187,8 @@ class MLEngine:
                 patterns=[
                     Pattern(
                         name="spaced_credit_card",
-                        regex=r"\b(?:\d{4}[ -]?){3}(?:\d{4}|\d{3})\b",
-                        score=0.8,
+                        regex=r"\b(?:\d{4}[ -]){3}\d{4}\b",
+                        score=0.85,
                     )
                 ],
             ),
@@ -224,8 +233,8 @@ class MLEngine:
                 patterns=[
                     Pattern(
                         name="alphanumeric_id",
-                        regex=r"\b(?=.*\d)(?=.*[a-zA-Z])[a-zA-Z0-9\-]{6,12}\b",
-                        score=0.5,
+                        regex=r"\b(?=[A-Za-z0-9\-]{6,12}\b)(?:[A-Za-z]+[\-]*[0-9]+|[0-9]+[\-]*[A-Za-z]+)[A-Za-z0-9\-]*\b",
+                        score=0.6,
                     )
                 ],
                 context=["id", "passport", "employee", "number"],
@@ -247,7 +256,7 @@ class MLEngine:
                 patterns=[
                     Pattern(
                         name="robust_address",
-                        regex=r"\b\d{1,5}\s(?:[A-Za-z0-9#\.\-]+\s?)+(?:Street|St|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Ct|Court|Cir|Circle|Way|Apt|Suite|Floor)[\w\s\.,]+(?:\b[A-Z]{2}\b\s\d{5}|\b\d{4,5}\b)",
+                        regex=r"\b\d{1,5}\s+[A-Za-z0-9\s#]{1,30}?(?:Street|St|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Ct|Court|Cir|Circle|Way|Terrace|Ter|Apt|Suite)\b(?:[\s,A-Za-z0-9#]{1,20}?)\b[A-Z]{2}\b\s+\d{5}\b",
                         score=0.7,
                     )
                 ],
@@ -292,6 +301,7 @@ class MLEngine:
             language="en",
             entities=self.active_entities,
             score_threshold=self.confidence_threshold,
+            allow_list=self.safe_terms,
         )
 
         filtered = []

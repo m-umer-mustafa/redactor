@@ -6,8 +6,8 @@ import uuid
 import multiprocessing
 
 import qdarktheme
-from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool, QUrl
-from PyQt6.QtGui import QFont, QIcon, QGuiApplication, QColor, QTextCursor, QTextCharFormat, QDesktopServices
+from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool, QUrl, QTimer
+from PyQt6.QtGui import QFont, QIcon, QGuiApplication, QColor, QTextCursor, QTextCharFormat, QDesktopServices, QAction
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -34,9 +34,11 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QHeaderView,
+    QAbstractItemView,
+    QMenu,
 )
 
-from audit import AuditLogger
+from audit import AuditLogger, delete_history_entries, clear_all_history
 from ui_components import (
     BackgroundProgressBanner,
     MultiFileDropZone,
@@ -140,6 +142,16 @@ class AppConfig:
 
     def update_settings(self, values: dict):
         self.data.update(values)
+        self.save()
+
+    def has_cumulative_dashboard_counters(self) -> bool:
+        keys = ["total_files_redacted", "total_approved", "total_rejected"]
+        return any(key in self.data for key in keys)
+
+    def reset_dashboard_counters(self) -> None:
+        self.data["total_files_redacted"] = 0
+        self.data["total_approved"] = 0
+        self.data["total_rejected"] = 0
         self.save()
 
 
@@ -328,14 +340,52 @@ class BatchPage(QWidget):
 
 
 class HistoryPage(QWidget):
+    deleteSelectedRequested = pyqtSignal(list)
+    clearAllRequested = pyqtSignal()
+    resetStatsRequested = pyqtSignal()
+
     def __init__(self):
         super().__init__()
+        self._confirm_armed = {
+            "clear_all": False,
+            "reset_stats": False,
+        }
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(10)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search by file name...")
         self.search_input.textChanged.connect(self._filter_rows)
+
+        button_row = QHBoxLayout()
+        self.btn_delete_selected = QPushButton("Delete Selected")
+        self.btn_clear_all = QPushButton("Clear All History")
+        self.btn_reset_stats = QPushButton("Reset Dashboard Stats")
+
+        self.btn_delete_selected.clicked.connect(self._request_delete_selected)
+        self.btn_clear_all.clicked.connect(
+            lambda: self._arm_or_execute_confirm(
+                key="clear_all",
+                button=self.btn_clear_all,
+                default_text="Clear All History",
+                action=self.clearAllRequested.emit,
+            )
+        )
+        self.btn_reset_stats.clicked.connect(
+            lambda: self._arm_or_execute_confirm(
+                key="reset_stats",
+                button=self.btn_reset_stats,
+                default_text="Reset Dashboard Stats",
+                action=self.resetStatsRequested.emit,
+            )
+        )
+
+        button_row.addWidget(self.btn_delete_selected)
+        button_row.addWidget(self.btn_clear_all)
+        button_row.addWidget(self.btn_reset_stats)
+        button_row.addStretch()
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["File", "Date", "Words Redacted", "Rejected Items"])
@@ -345,9 +395,53 @@ class HistoryPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
 
         layout.addWidget(self.search_input)
+        layout.addLayout(button_row)
         layout.addWidget(self.table)
+
+    def _request_delete_selected(self):
+        filenames = self.get_selected_filenames()
+        if not filenames:
+            return
+        self.deleteSelectedRequested.emit(filenames)
+
+    def _arm_or_execute_confirm(self, key: str, button: QPushButton, default_text: str, action):
+        if self._confirm_armed.get(key, False):
+            self._confirm_armed[key] = False
+            self._reset_confirm_button(button, default_text)
+            action()
+            return
+
+        self._confirm_armed[key] = True
+        button.setText("Are you sure? Click again")
+        button.setStyleSheet(
+            "background-color: #8b1e1e; color: white; border: 1px solid #b33636; border-radius: 6px;"
+        )
+
+        QTimer.singleShot(3000, lambda: self._expire_confirm(key, button, default_text))
+
+    def _expire_confirm(self, key: str, button: QPushButton, default_text: str):
+        if not self._confirm_armed.get(key, False):
+            return
+        self._confirm_armed[key] = False
+        self._reset_confirm_button(button, default_text)
+
+    @staticmethod
+    def _reset_confirm_button(button: QPushButton, default_text: str):
+        button.setText(default_text)
+        button.setStyleSheet("")
+
+    def get_selected_filenames(self) -> list[str]:
+        filenames = []
+        for model_index in self.table.selectionModel().selectedRows():
+            row = model_index.row()
+            file_item = self.table.item(row, 0)
+            if file_item:
+                filenames.append(file_item.text())
+        return list(dict.fromkeys(filenames))
 
     def load_entries(self, entries: list):
         self.table.setRowCount(0)
@@ -538,6 +632,7 @@ class ReviewPage(QWidget):
         super().__init__()
         self._approved = set()
         self._snippets = []
+        self._manual_snippets = {}  # Track manual additions by (start, end) tuple for easy removal
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 20, 20, 20)
@@ -579,12 +674,18 @@ class ReviewPage(QWidget):
         legend.addStretch()
 
         body = QHBoxLayout()
-        self.text_browser = QTextBrowser()
+
+        # Use QTextEdit instead of QTextBrowser to enable context menu
+        self.text_preview = QTextEdit()
+        self.text_preview.setReadOnly(True)
+        self.text_preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.text_preview.customContextMenuRequested.connect(self._show_context_menu)
+
         self.entity_list = QListWidget()
         self.entity_list.itemChanged.connect(self._on_item_changed)
         self.entity_list.setMaximumWidth(420)
 
-        body.addWidget(self.text_browser)
+        body.addWidget(self.text_preview)
         body.addWidget(self.entity_list)
 
         actions = QHBoxLayout()
@@ -607,36 +708,145 @@ class ReviewPage(QWidget):
     def load_document(self, raw_text: str, snippets: list, approved_entities: set):
         self._approved = set(approved_entities)
         self._snippets = list(snippets)
-        self.text_browser.setPlainText(raw_text)
+        self._manual_snippets = {}  # Reset manual additions when loading new document
+        self.text_preview.setPlainText(raw_text)
+        self._refresh_entity_list()
+        self._apply_highlighting()
+
+    def _refresh_entity_list(self):
+        """Rebuild entity list with sections for AI-detected and Manual Additions."""
         self.entity_list.blockSignals(True)
         self.entity_list.clear()
 
-        seen = set()
-        for snippet in snippets:
-            txt = snippet.get("text", "")
-            if not txt or txt in seen:
-                continue
-            seen.add(txt)
+        # Section 1: AI-Detected Entities
+        if self._snippets:
+            section_item = QListWidgetItem("━━ AI-DETECTED ━━")
+            section_item.setFlags(section_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            section_item.setForeground(QColor("#888888"))
+            font = section_item.font()
+            font.setBold(True)
+            section_item.setFont(font)
+            self.entity_list.addItem(section_item)
 
-            item = QListWidgetItem(f"{txt}  [{snippet.get('entity_type', 'UNKNOWN')}]")
-            item.setData(Qt.ItemDataRole.UserRole, txt)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked if txt in self._approved else Qt.CheckState.Unchecked)
-            self.entity_list.addItem(item)
+            seen = set()
+            for snippet in self._snippets:
+                txt = snippet.get("text", "")
+                if not txt or txt in seen:
+                    continue
+                seen.add(txt)
+
+                display_text = f"{txt}  [{snippet.get('entity_type', 'UNKNOWN')}]"
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, txt)
+                item.setData(Qt.ItemDataRole.UserRole + 1, "ai")  # Mark as AI-detected
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if txt in self._approved else Qt.CheckState.Unchecked)
+                self.entity_list.addItem(item)
+
+        # Section 2: Manual Additions
+        if self._manual_snippets:
+            section_item = QListWidgetItem("━━ MANUAL ADDITIONS ━━")
+            section_item.setFlags(section_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            section_item.setForeground(QColor("#d4a574"))
+            font = section_item.font()
+            font.setBold(True)
+            section_item.setFont(font)
+            self.entity_list.addItem(section_item)
+
+            for (start, end), snippet in self._manual_snippets.items():
+                txt = snippet.get("text", "")
+                display_text = f"{txt}  [MANUAL] ✕"
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, txt)
+                item.setData(Qt.ItemDataRole.UserRole + 1, "manual")  # Mark as manual
+                item.setData(Qt.ItemDataRole.UserRole + 2, (start, end))  # Store position for removal
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if txt in self._approved else Qt.CheckState.Unchecked)
+                self.entity_list.addItem(item)
 
         self.entity_list.blockSignals(False)
-        self._apply_highlighting()
 
     def _on_item_changed(self, item: QListWidgetItem):
         entity = item.data(Qt.ItemDataRole.UserRole)
+        item_type = item.data(Qt.ItemDataRole.UserRole + 1)  # "ai" or "manual"
+
+        # Handle manual removal: right-click or double-click on manual item with ✕
+        if item_type == "manual" and item.checkState() == Qt.CheckState.Unchecked:
+            pos_tuple = item.data(Qt.ItemDataRole.UserRole + 2)
+            if pos_tuple in self._manual_snippets:
+                del self._manual_snippets[pos_tuple]
+                self._refresh_entity_list()
+                self._apply_highlighting()
+                return
+
+        # Standard approve/reject logic
         if item.checkState() == Qt.CheckState.Checked:
             self._approved.add(entity)
         else:
             self._approved.discard(entity)
         self._apply_highlighting()
 
+    def _show_context_menu(self, position):
+        """Display context menu with 'Mark Selected Text for Redaction' option."""
+        cursor = self.text_preview.cursorForPosition(position)
+        self.text_preview.setTextCursor(cursor)
+
+        # Check if there is selected text
+        cursor = self.text_preview.textCursor()
+        if not cursor.hasSelection():
+            return  # No selection, don't show menu
+
+        menu = QMenu(self)
+        mark_action = QAction("Mark Selected Text for Redaction", self)
+        mark_action.triggered.connect(self._mark_selected_for_redaction)
+        menu.addAction(mark_action)
+
+        # Show menu at cursor position
+        menu.exec(self.text_preview.mapToGlobal(position))
+
+    def _mark_selected_for_redaction(self):
+        """Capture selected text and add as a manual redaction entity."""
+        cursor = self.text_preview.textCursor()
+        if not cursor.hasSelection():
+            return
+
+        selected_text = cursor.selectedText()
+        start_pos = cursor.selectionStart()
+        end_pos = cursor.selectionEnd()
+
+        if not selected_text or len(selected_text) == 0:
+            return
+
+        # Create manual entity dictionary (mimics presidio RecognizerResult structure)
+        manual_entity = {
+            "text": selected_text,
+            "entity_type": "MANUAL_REDACTION",
+            "start": start_pos,
+            "end": end_pos,
+            "score": 1.0,
+            "approved": True,
+        }
+
+        # Store in manual snippets tracker using (start, end) as unique key
+        self._manual_snippets[(start_pos, end_pos)] = manual_entity
+
+        # Automatically approve the manual entity
+        self._approved.add(selected_text)
+
+        # Add to main snippets list so it gets highlighted
+        self._snippets.append(manual_entity)
+
+        # Refresh UI
+        self._refresh_entity_list()
+        self._apply_highlighting()
+
+        # Clear selection so user can see the highlight applied
+        cursor.clearSelection()
+        self.text_preview.setTextCursor(cursor)
+
     def _apply_highlighting(self):
-        doc = self.text_browser.document()
+        """Apply approved/rejected background colors based on snippet positions."""
+        doc = self.text_preview.document()
         if doc is None:
             return
 
@@ -817,6 +1027,10 @@ class MainWindow(QMainWindow):
         self.settings_page.openFolderRequested.connect(self._open_default_export_path)
         self.settings_page.settings_saved_signal.connect(self._on_settings_saved)
 
+        self.history_page.deleteSelectedRequested.connect(self._delete_selected_history)
+        self.history_page.clearAllRequested.connect(self._clear_all_history)
+        self.history_page.resetStatsRequested.connect(self._reset_dashboard_stats)
+
     def _apply_performance_settings_from_config(self):
         max_threads = int(self.config.get_setting("max_concurrent_files", 2))
         self.threadpool.setMaxThreadCount(max(1, max_threads))
@@ -884,6 +1098,33 @@ class MainWindow(QMainWindow):
         ok = QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         if not ok:
             self.toast.show_toast("Could not open export folder")
+
+    def _delete_selected_history(self, filenames: list[str]):
+        deleted = delete_history_entries(filenames)
+        if deleted > 0:
+            self.toast.show_toast(f"Deleted {deleted} history entr{'y' if deleted == 1 else 'ies'}")
+        self._refresh_history()
+        self._refresh_dashboard_stats()
+
+    def _clear_all_history(self):
+        clear_all_history()
+        self.toast.show_toast("History cleared")
+        self._refresh_history()
+        self._refresh_dashboard_stats()
+
+    def _reset_dashboard_stats(self):
+        # If cumulative counters exist in config, reset them directly.
+        if self.config.has_cumulative_dashboard_counters():
+            self.config.reset_dashboard_counters()
+            self.dashboard_page.set_stats(0, 0, 0)
+            self.toast.show_toast("Dashboard stats reset")
+            return
+
+        # This app derives stats from audit history, so clearing history resets stats to zero.
+        clear_all_history()
+        self.toast.show_toast("Dashboard stats reset")
+        self._refresh_history()
+        self._refresh_dashboard_stats()
 
     def _enqueue_files(self, file_paths: list):
         valid = [p for p in file_paths if os.path.isfile(p) and p.lower().endswith((".pdf", ".docx"))]
