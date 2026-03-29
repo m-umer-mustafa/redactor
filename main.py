@@ -788,10 +788,7 @@ class ReviewPage(QWidget):
 
     def _show_context_menu(self, position):
         """Display context menu with 'Mark Selected Text for Redaction' option."""
-        cursor = self.text_preview.cursorForPosition(position)
-        self.text_preview.setTextCursor(cursor)
-
-        # Check if there is selected text
+        # Check if there is selected text (BEFORE moving cursor, which would clear selection)
         cursor = self.text_preview.textCursor()
         if not cursor.hasSelection():
             return  # No selection, don't show menu
