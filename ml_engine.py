@@ -1,249 +1,338 @@
 import logging
-from typing import List, Dict, Any
-from presidio_analyzer import AnalyzerEngine, RecognizerResult
-from presidio_analyzer import PatternRecognizer, Pattern
+import re
+from typing import Any, Dict, List
+
+from presidio_analyzer import (
+    AnalyzerEngine,
+    Pattern,
+    PatternRecognizer,
+    RecognizerRegistry,
+    RecognizerResult,
+)
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 
 logger = logging.getLogger(__name__)
 
+
 class MLEngine:
-    DEFAULT_TARGET_ENTITIES = [
+    # Keep defaults strongly aligned with standard Presidio entities.
+    DEFAULT_STANDARD_ENTITIES = [
         "PERSON",
-        "LOCATION",
         "ORGANIZATION",
+        "LOCATION",
         "EMAIL_ADDRESS",
         "PHONE_NUMBER",
         "US_SSN",
-        "MASKED_US_SSN",
-        "IBAN_CODE",
         "CREDIT_CARD",
-        "ACCOUNT_ENDING",
-        "CURRENCY_AMOUNT",
-        "MONEY",
-        "FACILITY",
-        "PRODUCT",
-        "STREET_ADDRESS",
-        "US_ZIP_CODE",
+        "IBAN_CODE",
     ]
+
+    CUSTOM_ENTITY_NAMES = [
+        "CURRENCY_AMOUNT",
+        "DATE_DOB",
+        "CREDIT_CARD_SPACED",
+        "GLOBAL_IBAN",
+        "SWIFT_CODE",
+        "ROUTING_OR_ACCOUNT_NUMBER",
+        "ALPHANUMERIC_ID",
+        "PHONE_NUMBER_FALLBACK",
+        "ROBUST_ADDRESS_BLOCK",
+    ]
+
+    # Accept aliases from config and normalize to Presidio entities.
+    ENTITY_ALIASES = {
+        "PERSON": "PERSON",
+        "ORG": "ORGANIZATION",
+        "ORGANIZATION": "ORGANIZATION",
+        "GPE": "LOCATION",
+        "LOC": "LOCATION",
+        "LOCATION": "LOCATION",
+        "EMAIL": "EMAIL_ADDRESS",
+        "EMAIL_ADDRESS": "EMAIL_ADDRESS",
+        "PHONE": "PHONE_NUMBER",
+        "PHONE_NUMBER": "PHONE_NUMBER",
+        "US_SSN": "US_SSN",
+        "CREDIT_CARD": "CREDIT_CARD",
+        "IBAN": "IBAN_CODE",
+        "IBAN_CODE": "IBAN_CODE",
+    }
 
     SAFE_LEGAL_TERMS = [
-        "Confidential Settlement and Release Agreement",
-        "Post-Employment Obligations",
-        "Operations",
-        "SSN",
-        "Employer",
-        "Employee",
+        "Slack",
+        "NDA",
+        "Agreement",
+        "Transcription",
+        "DOB",
+        "Patient",
+        "Admitted",
+        "Hospital",
+        "Landlord",
+        "Tenant",
+        "Premises",
+        "Security",
+        "Clinical",
     ]
 
-    # Apply stricter thresholds to noisy general NER classes often over-triggered
-    # by legal title-cased boilerplate text.
+    # Keep PERSON threshold reasonable so names are not dropped.
     ENTITY_MIN_SCORE = {
-        "ORGANIZATION": 0.85,
-        "PERSON": 0.85,
-        "FACILITY": 0.85,
-        "PRODUCT": 0.85,
+        "PERSON": 0.55,
     }
 
     def __init__(
         self,
         use_transformer: bool = False,
-        confidence_threshold: float = 0.6,
+        confidence_threshold: float = 0.5,
         target_entities: List[str] | None = None,
         custom_allow_list: List[str] | None = None,
     ):
-        """
-        Initializes the fully local NLP engine for PII detection.
-        We default to the Large model (en_core_web_lg) for high accuracy and speed 
-        without PyTorch DLL dependencies on Windows.
-        """
         self.model_name = "en_core_web_trf" if use_transformer else "en_core_web_lg"
         self.confidence_threshold = float(confidence_threshold)
-        self.target_entities = target_entities[:] if target_entities else self.DEFAULT_TARGET_ENTITIES[:]
         self.safe_terms = self.SAFE_LEGAL_TERMS[:] + [
             term.strip() for term in (custom_allow_list or []) if term and term.strip()
         ]
-        
-        logger.info(f"Initializing ML Engine with local model: {self.model_name}")
-        
-        try:
-            # We configure the NLP engine to use the downloaded model
-            configuration = {
-                "nlp_engine_name": "spacy",
-                "models": [{"lang_code": "en", "model_name": self.model_name}],
-                # Route additional spaCy labels so Presidio can return them as entities.
-                # This helps expose MONEY/FAC/PRODUCT when present in model output.
-                "ner_model_configuration": {
-                    "labels_to_ignore": [],
-                    "model_to_presidio_entity_mapping": {
-                        "PER": "PERSON",
-                        "PERSON": "PERSON",
-                        "LOC": "LOCATION",
-                        "GPE": "LOCATION",
-                        "ORG": "ORGANIZATION",
-                        "DATE": "DATE_TIME",
-                        "TIME": "DATE_TIME",
-                        "MONEY": "MONEY",
-                        "FAC": "FACILITY",
-                        "PRODUCT": "PRODUCT"
-                    }
-                }
-            }
-            
-            provider = NlpEngineProvider(nlp_configuration=configuration)
-            nlp_engine = provider.create_engine()
-            
-            # The AnalyzerEngine runs the text against the model + robust RegEx rules
-            self.analyzer = AnalyzerEngine(
-                nlp_engine=nlp_engine, 
-                supported_languages=["en"]
-            )
+        self.active_entities = self._resolve_active_entities(target_entities)
 
-            self._register_custom_recognizers()
-            logger.info("ML Engine initialized successfully.")
-        except OSError as e:
-            logger.error(f"Failed to load model {self.model_name}. Ensure you ran: python -m spacy download {self.model_name}")
-            raise e
+        logger.info("Initializing ML Engine with local model: %s", self.model_name)
 
-    def _register_custom_recognizers(self) -> None:
-        """
-        Register regex recognizers for legal-document leakage cases that default
-        recognizers often miss (masked SSNs, account endings, currency amounts,
-        and fragmented address pieces).
-        """
-        custom_recognizers = [
-            PatternRecognizer(
-                supported_entity="MASKED_US_SSN",
-                name="masked_us_ssn_recognizer",
-                patterns=[
-                    Pattern(
-                        name="masked_ssn",
-                        regex=r"\b(?:\*|X|x){3}-(?:\*|X|x){2}-\d{4}\b",
-                        score=0.8,
-                    ),
-                ],
-            ),
+        configuration = {
+            "nlp_engine_name": "spacy",
+            "models": [{"lang_code": "en", "model_name": self.model_name}],
+            "ner_model_configuration": {
+                "labels_to_ignore": [],
+                "model_to_presidio_entity_mapping": {
+                    "PER": "PERSON",
+                    "PERSON": "PERSON",
+                    "ORG": "ORGANIZATION",
+                    "GPE": "LOCATION",
+                    "LOC": "LOCATION",
+                    "MONEY": "MONEY",
+                    "DATE": "DATE_TIME",
+                    "TIME": "DATE_TIME",
+                },
+            },
+        }
+
+        provider = NlpEngineProvider(nlp_configuration=configuration)
+        self.nlp_engine = provider.create_engine()
+
+        # Explicitly instantiate registry and register recognizers.
+        self.registry = RecognizerRegistry()
+        self.registry.load_predefined_recognizers(
+            nlp_engine=self.nlp_engine,
+            languages=["en"],
+        )
+
+        self._register_custom_recognizers(self.registry)
+
+        self.analyzer = AnalyzerEngine(
+            registry=self.registry,
+            nlp_engine=self.nlp_engine,
+            supported_languages=["en"],
+        )
+
+    def _resolve_active_entities(self, configured_entities: List[str] | None) -> List[str]:
+        normalized = []
+        for entity in configured_entities or []:
+            mapped = self.ENTITY_ALIASES.get(entity.strip().upper()) if entity else None
+            if mapped and mapped not in normalized:
+                normalized.append(mapped)
+
+        # Critical safety: if empty, use all standard entities.
+        if not normalized:
+            normalized = self.DEFAULT_STANDARD_ENTITIES[:]
+
+        # Always include custom entities so regex recognizers can fire.
+        for custom_name in self.CUSTOM_ENTITY_NAMES:
+            if custom_name not in normalized:
+                normalized.append(custom_name)
+
+        return normalized
+
+    def _register_custom_recognizers(self, registry: RecognizerRegistry) -> None:
+        recognizers = [
             PatternRecognizer(
                 supported_entity="CURRENCY_AMOUNT",
                 name="currency_amount_recognizer",
                 patterns=[
                     Pattern(
-                        name="currency_dollar_amount",
-                        regex=r"\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b",
+                        name="currency_amount",
+                        regex=r"[\$\€\£]\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b",
                         score=0.8,
-                    ),
+                    )
                 ],
             ),
             PatternRecognizer(
-                supported_entity="ACCOUNT_ENDING",
-                name="account_ending_recognizer",
+                supported_entity="DATE_DOB",
+                name="date_dob_recognizer",
                 patterns=[
                     Pattern(
-                        name="account_or_card_ending",
-                        regex=r"\b(?:ending in|account|card)\s+\d{4}\b",
+                        name="date_dob",
+                        regex=r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+                        score=0.6,
+                    )
+                ],
+            ),
+            PatternRecognizer(
+                supported_entity="CREDIT_CARD_SPACED",
+                name="spaced_credit_card_recognizer",
+                patterns=[
+                    Pattern(
+                        name="spaced_credit_card",
+                        regex=r"\b(?:\d{4}[ -]?){3}(?:\d{4}|\d{3})\b",
                         score=0.8,
-                    ),
+                    )
                 ],
             ),
             PatternRecognizer(
-                supported_entity="STREET_ADDRESS",
-                name="street_address_recognizer",
+                supported_entity="GLOBAL_IBAN",
+                name="global_iban_recognizer",
                 patterns=[
                     Pattern(
-                        name="basic_us_street_address",
-                        regex=r"\b\d+\s+[A-Za-z0-9\s\.\-]+?(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Lane|Ln|Drive|Dr|Court|Ct|Circle|Cir|Terrace|Ter|Way)\b",
-                        score=0.6,
-                    ),
+                        name="global_iban",
+                        regex=r"\b[a-zA-Z]{2}[0-9]{2}[a-zA-Z0-9]{11,28}\b",
+                        score=0.85,
+                    )
                 ],
             ),
             PatternRecognizer(
-                supported_entity="US_ZIP_CODE",
-                name="us_zip_code_recognizer",
+                supported_entity="SWIFT_CODE",
+                name="swift_bic_recognizer",
                 patterns=[
                     Pattern(
-                        name="us_zip_code",
-                        regex=r"\b\d{5}(?:-\d{4})?\b",
+                        name="swift_bic",
+                        regex=r"\b[a-zA-Z]{6}[a-zA-Z0-9]{2}(?:[a-zA-Z0-9]{3})?\b",
+                        score=0.01,
+                    )
+                ],
+                context=["swift", "bic"],
+            ),
+            PatternRecognizer(
+                supported_entity="ROUTING_OR_ACCOUNT_NUMBER",
+                name="routing_account_number_recognizer",
+                patterns=[
+                    Pattern(
+                        name="routing_account_digits",
+                        regex=r"\b\d{8,12}\b",
+                        score=0.8,
+                    )
+                ],
+                context=["routing", "account", "deposit", "wire"],
+            ),
+            PatternRecognizer(
+                supported_entity="ALPHANUMERIC_ID",
+                name="alphanumeric_id_recognizer",
+                patterns=[
+                    Pattern(
+                        name="alphanumeric_id",
+                        regex=r"\b(?=.*\d)(?=.*[a-zA-Z])[a-zA-Z0-9\-]{6,12}\b",
+                        score=0.5,
+                    )
+                ],
+                context=["id", "passport", "employee", "number"],
+            ),
+            PatternRecognizer(
+                supported_entity="PHONE_NUMBER_FALLBACK",
+                name="phone_fallback_recognizer",
+                patterns=[
+                    Pattern(
+                        name="phone_fallback",
+                        regex=r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
                         score=0.6,
-                    ),
+                    )
+                ],
+            ),
+            PatternRecognizer(
+                supported_entity="ROBUST_ADDRESS_BLOCK",
+                name="robust_address_block_recognizer",
+                patterns=[
+                    Pattern(
+                        name="robust_address",
+                        regex=r"\b\d{1,5}\s(?:[A-Za-z0-9#\.\-]+\s?)+(?:Street|St|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Ct|Court|Cir|Circle|Way|Apt|Suite|Floor)[\w\s\.,]+(?:\b[A-Z]{2}\b\s\d{5}|\b\d{4,5}\b)",
+                        score=0.7,
+                    )
                 ],
             ),
         ]
 
-        for recognizer in custom_recognizers:
-            self.analyzer.registry.add_recognizer(recognizer)
+        for recognizer in recognizers:
+            registry.add_recognizer(recognizer)
 
     def _is_allow_list_match(self, entity_text: str) -> bool:
-        """
-        Ignore exact and partial matches for safe legal boilerplate terms.
-        """
         normalized = entity_text.strip().lower()
         if not normalized:
             return False
-
         for safe_term in self.safe_terms:
             safe = safe_term.lower()
-            if normalized == safe:
-                return True
-            if normalized in safe or safe in normalized:
+            if normalized == safe or normalized in safe or safe in normalized:
                 return True
         return False
 
-    @classmethod
-    def _passes_entity_threshold(cls, result: RecognizerResult) -> bool:
-        min_score = cls.ENTITY_MIN_SCORE.get(result.entity_type, 0.6)
+    def _passes_entity_threshold(self, result: RecognizerResult) -> bool:
+        min_score = self.ENTITY_MIN_SCORE.get(result.entity_type, self.confidence_threshold)
         return result.score >= min_score
 
+    @staticmethod
+    def _is_fragmented_person_name(entity_text: str) -> bool:
+        # Keep single-token person names if they look like title-case words,
+        # but filter very short/noisy tokens.
+        tokens = [t for t in re.split(r"\s+", entity_text.strip()) if t]
+        if len(tokens) >= 2:
+            return False
+        if not tokens:
+            return True
+        token = tokens[0]
+        return len(token) < 3
+
     def analyze_text(self, text: str) -> List[RecognizerResult]:
-        """
-        Analyzes a block of text and returns a list of PII candidate results.
-        Runs completely offline.
-        """
         if not text.strip():
             return []
-            
-        # We target specific legal/sensitive entities for the MVP
-        # such as Person names, Organizations, Locations, Emails, Phone numbers
+
         results = self.analyzer.analyze(
             text=text,
-            language='en',
-            entities=self.target_entities,
+            language="en",
+            entities=self.active_entities,
             score_threshold=self.confidence_threshold,
         )
 
-        filtered_results = []
+        filtered = []
         for result in results:
             entity_text = text[result.start:result.end]
 
             if self._is_allow_list_match(entity_text):
                 continue
-
             if not self._passes_entity_threshold(result):
                 continue
+            if result.entity_type == "PERSON" and self._is_fragmented_person_name(entity_text):
+                continue
 
-            filtered_results.append(result)
-        
-        # Sort by start position for easier handling
-        filtered_results.sort(key=lambda x: x.start)
-        return filtered_results
+            filtered.append(result)
 
-    def get_candidate_snippets(self, text: str, results: List[RecognizerResult], context_chars: int = 30) -> List[Dict[str, Any]]:
-        """
-        Helper method to extract the text snippet around the detected PII for the Review UI.
-        """
+        filtered.sort(key=lambda x: x.start)
+        return filtered
+
+    def get_candidate_snippets(
+        self,
+        text: str,
+        results: List[RecognizerResult],
+        context_chars: int = 30,
+    ) -> List[Dict[str, Any]]:
         snippets = []
         for res in results:
             start_idx = max(0, res.start - context_chars)
             end_idx = min(len(text), res.end + context_chars)
-            
+
             snippet_text = text[start_idx:end_idx]
             entity_text = text[res.start:res.end]
-            
-            snippets.append({
-                "entity_type": res.entity_type,
-                "score": res.score,
-                "text": entity_text,
-                "start": res.start,
-                "end": res.end,
-                "context_snippet": f"...{snippet_text}..."
-            })
-            
+
+            snippets.append(
+                {
+                    "entity_type": res.entity_type,
+                    "score": res.score,
+                    "text": entity_text,
+                    "start": res.start,
+                    "end": res.end,
+                    "context_snippet": f"...{snippet_text}...",
+                }
+            )
+
         return snippets

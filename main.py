@@ -125,7 +125,6 @@ class AppConfig:
             "custom_allow_list": [],
             "redaction_style": "[REDACTED]",
             "file_suffix": "_REDACTED",
-            "theme": "Dark Mode",
             "max_concurrent_files": 2,
         }
         changed = False
@@ -155,15 +154,16 @@ class SidebarButton(QPushButton):
                 text-align: left;
                 padding: 10px 12px;
                 border-radius: 8px;
-                color: #d4d4d8;
+                color: palette(button-text);
+                background-color: transparent;
             }
             QPushButton:checked {
-                background-color: #25314f;
-                color: #ffffff;
+                background-color: palette(highlight);
+                color: palette(highlighted-text);
                 font-weight: bold;
             }
             QPushButton:hover:!checked {
-                background-color: #1f293e;
+                background-color: rgba(127, 127, 127, 0.16);
             }
             """
         )
@@ -222,7 +222,9 @@ class DashboardPage(QWidget):
         self.total_rejected = QLabel("Rejected Items: 0")
         for widget in (self.total_files, self.total_approved, self.total_rejected):
             panel = QFrame()
-            panel.setStyleSheet("background:#1d1f25; border:1px solid #31353f; border-radius:10px;")
+            panel.setStyleSheet(
+                "background-color: palette(base); border: 1px solid palette(mid); border-radius: 10px;"
+            )
             p_layout = QVBoxLayout(panel)
             p_layout.addWidget(widget)
             stats_row.addWidget(panel)
@@ -464,13 +466,6 @@ class SettingsView(QWidget):
         sys_label.setFont(QFont("Inter", 12, QFont.Weight.Bold))
         form.addWidget(sys_label)
 
-        theme_row = QHBoxLayout()
-        theme_row.addWidget(QLabel("Theme"))
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(["Light Mode", "Dark Mode"])
-        theme_row.addWidget(self.theme_combo, 1)
-        form.addLayout(theme_row)
-
         threads_row = QHBoxLayout()
         threads_row.addWidget(QLabel("Max Concurrent Files (Threads)"))
         self.thread_spin = QSpinBox()
@@ -503,7 +498,6 @@ class SettingsView(QWidget):
             "custom_allow_list": allow_list,
             "redaction_style": self.redaction_style_combo.currentText(),
             "file_suffix": self.file_suffix_input.text().strip() or "_REDACTED",
-            "theme": self.theme_combo.currentText(),
             "max_concurrent_files": int(self.thread_spin.value()),
             "default_export_path": self.path_input.text().strip(),
         }
@@ -528,10 +522,6 @@ class SettingsView(QWidget):
         self.redaction_style_combo.setCurrentIndex(index if index >= 0 else 0)
 
         self.file_suffix_input.setText(config.get_setting("file_suffix", "_REDACTED"))
-
-        theme = config.get_setting("theme", "Dark Mode")
-        theme_idx = self.theme_combo.findText(theme)
-        self.theme_combo.setCurrentIndex(theme_idx if theme_idx >= 0 else 1)
 
         max_threads = int(config.get_setting("max_concurrent_files", 2))
         self.thread_spin.setValue(max(1, min(max_threads, self.thread_spin.maximum())))
@@ -758,7 +748,7 @@ class MainWindow(QMainWindow):
 
         self._wire_events()
         self.settings_page.load_from_config(self.config)
-        self._apply_runtime_settings_from_config()
+        self._apply_performance_settings_from_config()
         self._route_initial_page()
         self._refresh_dashboard_stats()
 
@@ -780,7 +770,7 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         panel = QFrame()
         panel.setFixedWidth(230)
-        panel.setStyleSheet("background-color: #15171d; border-right: 1px solid #262a35;")
+        panel.setStyleSheet("background-color: palette(window); border-right: 1px solid palette(mid);")
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(16, 22, 16, 16)
@@ -827,12 +817,7 @@ class MainWindow(QMainWindow):
         self.settings_page.openFolderRequested.connect(self._open_default_export_path)
         self.settings_page.settings_saved_signal.connect(self._on_settings_saved)
 
-    def _apply_runtime_settings_from_config(self):
-        theme = self.config.get_setting("theme", "Dark Mode")
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(qdarktheme.load_stylesheet("light" if theme == "Light Mode" else "dark"))
-
+    def _apply_performance_settings_from_config(self):
         max_threads = int(self.config.get_setting("max_concurrent_files", 2))
         self.threadpool.setMaxThreadCount(max(1, max_threads))
 
@@ -890,7 +875,7 @@ class MainWindow(QMainWindow):
 
         self.config.update_settings(payload)
         self.settings_page.load_from_config(self.config)
-        self._apply_runtime_settings_from_config()
+        self._apply_performance_settings_from_config()
         self.toast.show_toast("Settings saved")
 
     def _open_default_export_path(self):
@@ -1248,7 +1233,10 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
 
     app = QApplication(sys.argv)
-    app.setStyleSheet(qdarktheme.load_stylesheet("dark"))
+    if hasattr(qdarktheme, "setup_theme"):
+        qdarktheme.setup_theme("dark")
+    else:
+        app.setStyleSheet(qdarktheme.load_stylesheet("dark"))
     app.setFont(QFont("Inter", 10))
 
     window = MainWindow()

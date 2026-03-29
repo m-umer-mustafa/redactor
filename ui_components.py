@@ -28,12 +28,10 @@ class MultiFileDropZone(QFrame):
         title = QLabel("Drop Files To Start Batch")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFont(QFont("Inter", 18, QFont.Weight.Bold))
-        title.setStyleSheet("color: #f0f0f0;")
 
         subtitle = QLabel("Supports multiple PDF and DOCX files")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setFont(QFont("Inter", 11))
-        subtitle.setStyleSheet("color: #9aa0a6;")
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -42,9 +40,9 @@ class MultiFileDropZone(QFrame):
         self.setStyleSheet(
             """
             #dropzone {
-                border: 2px dashed #4e4e50;
+                border: 2px dashed palette(text);
                 border-radius: 14px;
-                background-color: #1e1e1e;
+                background-color: transparent;
                 padding: 32px;
             }
             """
@@ -61,9 +59,9 @@ class MultiFileDropZone(QFrame):
             self.setStyleSheet(
                 """
                 #dropzone {
-                    border: 2px solid #2e7dff;
+                    border: 2px dashed palette(highlight);
                     border-radius: 14px;
-                    background-color: #172036;
+                    background-color: palette(base);
                     padding: 32px;
                 }
                 """

@@ -11,8 +11,8 @@
     "US_SSN"
   ],
   "custom_allow_list": [],
-  "redaction_style": "[REDACTED]",
+  "redaction_style": "[PII_TYPE]",
   "file_suffix": "_REDACTED",
   "theme": "Dark Mode",
-  "max_concurrent_files": 2
+  "max_concurrent_files": 1
 }
