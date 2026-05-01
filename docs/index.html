@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Redactor — AI-Powered Local PII Redaction</title>
+  <meta name="description"
+    content="Automatically detect and redact PII from Word and PDF documents. 100% local — no cloud, no data exposure, full audit trail." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+    rel="stylesheet" />
+
+  <!-- GA4 Tag — replace G-XXXXXXXXXX with your real Measurement ID -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-S1MR2W37VM"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+    gtag('config', 'G-S1MR2W37VM');
+
+    function trackDownload() {
+      gtag('event', 'download_click', {
+        event_category: 'engagement',
+        event_label: 'hero_download_button'
+      });
+    }
+  </script>
+
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0d0f14;
+      --surface: #13161e;
+      --card: #181c27;
+      --border: #252a38;
+      --accent: #c0392b;
+      --accent2: #e74c3c;
+      --accent-glow: rgba(192, 57, 43, 0.25);
+      --text: #f0f2f7;
+      --muted: #8892a4;
+      --dim: #50586a;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 7%;
+      height: 64px;
+      background: rgba(13, 15, 20, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-brand {
+      font-weight: 800;
+      font-size: 1.1rem;
+      letter-spacing: .08em;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-brand .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: inline-block;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 28px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: .9rem;
+      font-weight: 500;
+      transition: color .2s;
+    }
+
+    .nav-links a:hover {
+      color: var(--text);
+    }
+
+    .nav-cta {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 9px 22px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: .9rem;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background .2s, transform .15s, box-shadow .2s;
+    }
+
+    .nav-cta:hover {
+      background: var(--accent2);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px var(--accent-glow);
+    }
+
+    /* ── HERO ── */
+    .hero {
+      position: relative;
+      min-height: 92vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 80px 7% 60px;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(192, 57, 43, .18) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(192, 57, 43, .12);
+      border: 1px solid rgba(192, 57, 43, .35);
+      color: #e88;
+      border-radius: 100px;
+      padding: 6px 16px;
+      font-size: .8rem;
+      font-weight: 600;
+      margin-bottom: 28px;
+      letter-spacing: .04em;
+    }
+
+    .hero-badge .pulse {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+
+      50% {
+        opacity: .5;
+        transform: scale(1.4);
+      }
+    }
+
+    h1 {
+      font-size: clamp(2.4rem, 5.5vw, 4.2rem);
+      font-weight: 900;
+      line-height: 1.1;
+      letter-spacing: -.02em;
+      max-width: 820px;
+    }
+
+    h1 .highlight {
+      color: var(--accent2);
+    }
+
+    .hero-sub {
+      color: var(--muted);
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      max-width: 580px;
+      margin: 22px auto 40px;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--accent);
+      color: #fff;
+      padding: 14px 32px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 1rem;
+      text-decoration: none;
+      transition: all .2s;
+      box-shadow: 0 0 0 0 var(--accent-glow);
+    }
+
+    .btn-primary:hover {
+      background: var(--accent2);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px var(--accent-glow);
+    }
+
+    .btn-ghost {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 14px 28px;
+      border-radius: 10px;
+      font-weight: 500;
+      font-size: 1rem;
+      text-decoration: none;
+      transition: all .2s;
+    }
+
+    .btn-ghost:hover {
+      border-color: var(--dim);
+      color: var(--text);
+    }
+
+    .hero-trust {
+      margin-top: 48px;
+      color: var(--dim);
+      font-size: .82rem;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .trust-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .trust-item svg {
+      color: #4caf50;
+    }
+
+    /* ── APP PREVIEW ── */
+    .preview-wrap {
+      margin-top: 60px;
+      width: 100%;
+      max-width: 860px;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: 0 40px 80px rgba(0, 0, 0, .6);
+    }
+
+    .preview-bar {
+      background: #1a1d28;
+      padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dot-red {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ff5f56;
+    }
+
+    .dot-yellow {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ffbd2e;
+    }
+
+    .dot-green {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #27c93f;
+    }
+
+    .preview-inner {
+      background: var(--card);
+      padding: 28px 24px;
+      display: flex;
+      gap: 20px;
+      min-height: 260px;
+    }
+
+    .fake-sidebar {
+      width: 180px;
+      flex-shrink: 0;
+      background: #111420;
+      border-radius: 10px;
+      padding: 14px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .fake-brand {
+      font-weight: 800;
+      font-size: .85rem;
+      letter-spacing: .08em;
+      color: #f4f4f5;
+      margin-bottom: 10px;
+    }
+
+    .fake-nav-item {
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: .8rem;
+      color: var(--muted);
+    }
+
+    .fake-nav-item.active {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .fake-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .fake-heading {
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--text);
+    }
+
+    .fake-doc {
+      background: #111420;
+      border-radius: 8px;
+      padding: 16px;
+      font-size: .78rem;
+      color: var(--muted);
+      line-height: 1.9;
+      flex: 1;
+    }
+
+    .redacted {
+      background: var(--accent);
+      color: transparent;
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: .78rem;
+      display: inline-block;
+      animation: flicker 3s ease-in-out infinite;
+    }
+
+    @keyframes flicker {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: .7;
+      }
+    }
+
+    .entity-tag {
+      display: inline-block;
+      background: rgba(192, 57, 43, .15);
+      border: 1px solid rgba(192, 57, 43, .4);
+      color: #e88;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: .72rem;
+      margin-left: 4px;
+    }
+
+    /* ── STATS BAR ── */
+    .stats-bar {
+      display: flex;
+      justify-content: center;
+      gap: 60px;
+      flex-wrap: wrap;
+      padding: 44px 7%;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .stat {
+      text-align: center;
+    }
+
+    .stat-num {
+      font-size: 2.4rem;
+      font-weight: 900;
+      color: var(--accent2);
+      line-height: 1;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: .85rem;
+      margin-top: 4px;
+    }
+
+    /* ── HOW IT WORKS ── */
+    .section {
+      padding: 80px 7%;
+    }
+
+    .section-label {
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      font-size: .75rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+
+    h2 {
+      font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+      font-weight: 800;
+      line-height: 1.2;
+      margin-bottom: 14px;
+    }
+
+    .section-sub {
+      color: var(--muted);
+      font-size: 1rem;
+      max-width: 520px;
+      margin-bottom: 50px;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 24px;
+    }
+
+    .step {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 28px 24px;
+      transition: border-color .2s, transform .2s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .step::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), transparent);
+      opacity: 0;
+      transition: opacity .2s;
+    }
+
+    .step:hover {
+      border-color: rgba(192, 57, 43, .4);
+      transform: translateY(-4px);
+    }
+
+    .step:hover::before {
+      opacity: 1;
+    }
+
+    .step-num {
+      font-size: 2rem;
+      font-weight: 900;
+      color: var(--accent);
+      opacity: .3;
+      line-height: 1;
+      margin-bottom: 14px;
+    }
+
+    .step h3 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .step p {
+      color: var(--muted);
+      font-size: .9rem;
+    }
+
+    /* ── FEATURES ── */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .feature {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 26px 22px;
+      transition: border-color .2s;
+    }
+
+    .feature:hover {
+      border-color: var(--dim);
+    }
+
+    .feature-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      background: rgba(192, 57, 43, .12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+      font-size: 1.3rem;
+    }
+
+    .feature h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .feature p {
+      color: var(--muted);
+      font-size: .88rem;
+    }
+
+    /* ── CTA SECTION ── */
+    .cta-section {
+      text-align: center;
+      padding: 100px 7%;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cta-section::before {
+      content: '';
+      position: absolute;
+      bottom: -60px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 300px;
+      background: radial-gradient(ellipse, rgba(192, 57, 43, .2) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .cta-section h2 {
+      margin-bottom: 16px;
+    }
+
+    .cta-section p {
+      color: var(--muted);
+      margin-bottom: 36px;
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      padding: 32px 7%;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      color: var(--dim);
+      font-size: .82rem;
+    }
+
+    @media (max-width: 640px) {
+      nav {
+        padding: 0 5%;
+      }
+
+      .nav-links {
+        display: none;
+      }
+
+      .section {
+        padding: 60px 5%;
+      }
+
+      .stats-bar {
+        gap: 32px;
+        padding: 40px 5%;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- NAV -->
+  <nav>
+    <div class="nav-brand">
+      <span class="dot"></span> THE REDACTOR
+    </div>
+    <ul class="nav-links">
+      <li><a href="#how-it-works">How It Works</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#download">Download</a></li>
+    </ul>
+    <a href="#download" class="nav-cta" onclick="trackDownload()">Download Free</a>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-badge">
+      <span class="pulse"></span> 100% Local &mdash; No Cloud, No Risk
+    </div>
+    <h1>Redact <span class="highlight">PII from documents</span> in seconds.</h1>
+    <p class="hero-sub">
+      AI-powered detection of names, SSNs, emails, phone numbers, and more &mdash;
+      with a human review step before anything is applied. Everything runs on your machine.
+    </p>
+    <div class="hero-actions">
+      <a href="#download" class="btn-primary" id="hero-download-btn" onclick="trackDownload()">
+        ⬇ Download for Windows
+      </a>
+      <a href="#how-it-works" class="btn-ghost">See how it works →</a>
+    </div>
+    <div class="hero-trust">
+      <span class="trust-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+        </svg>
+        No cloud upload
+      </span>
+      <span class="trust-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+        </svg>
+        Full audit trail
+      </span>
+      <span class="trust-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+        </svg>
+        Human review before apply
+      </span>
+      <span class="trust-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+        </svg>
+        Free to download
+      </span>
+    </div>
+
+    <!-- Fake App Preview -->
+    <div class="preview-wrap">
+      <div class="preview-bar">
+        <div class="dot-red"></div>
+        <div class="dot-yellow"></div>
+        <div class="dot-green"></div>
+      </div>
+      <div class="preview-inner">
+        <div class="fake-sidebar">
+          <div class="fake-brand">THE REDACTOR</div>
+          <div class="fake-nav-item">Dashboard</div>
+          <div class="fake-nav-item active">Batch Redaction</div>
+          <div class="fake-nav-item">History</div>
+          <div class="fake-nav-item">Settings</div>
+        </div>
+        <div class="fake-content">
+          <div class="fake-heading">Review Detected Entities</div>
+          <div class="fake-doc">
+            This Settlement Agreement is entered into by
+            <span class="redacted">████████████</span><span class="entity-tag">PERSON</span>
+            and
+            <span class="redacted">████████</span><span class="entity-tag">ORG</span>,
+            effective <span class="redacted">███████</span>. The employee's SSN
+            <span class="redacted">███-██-████</span><span class="entity-tag">SSN</span>
+            and email
+            <span class="redacted">████████████████</span><span class="entity-tag">EMAIL</span>
+            have been redacted. All parties agree to the terms set forth herein...
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATS BAR -->
+  <div class="stats-bar">
+    <div class="stat">
+      <div class="stat-num">6+</div>
+      <div class="stat-label">PII Entity Types</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">100%</div>
+      <div class="stat-label">Local Processing</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">0</div>
+      <div class="stat-label">Data Sent to Cloud</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">DOCX + PDF</div>
+      <div class="stat-label">Supported Formats</div>
+    </div>
+  </div>
+
+  <!-- HOW IT WORKS -->
+  <section class="section" id="how-it-works">
+    <div class="section-label">How It Works</div>
+    <h2>Three steps to a clean document.</h2>
+    <p class="section-sub">Drop a file, review the AI's suggestions, export the redacted version. Done.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">01</div>
+        <h3>Drop Your Document</h3>
+        <p>Drag and drop a .docx or .pdf file into Redactor. Batch multiple files at once.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">02</div>
+        <h3>AI Detects PII</h3>
+        <p>The ML engine scans for names, SSNs, emails, phone numbers, locations, and organizations — locally.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">03</div>
+        <h3>Review &amp; Export</h3>
+        <p>Approve or reject each detected entity before anything is applied. Export a clean, redacted copy.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="section" id="features" style="background: var(--surface); border-top: 1px solid var(--border);">
+    <div class="section-label">Features</div>
+    <h2>Built for compliance teams.</h2>
+    <p class="section-sub">Every feature designed around the needs of legal and privacy professionals.</p>
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">🔒</div>
+        <h3>100% Offline Processing</h3>
+        <p>Your documents never leave your machine. No API calls, no cloud storage, no third-party data exposure.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🤖</div>
+        <h3>AI-Powered PII Detection</h3>
+        <p>Detects PERSON, LOCATION, ORG, EMAIL, PHONE, and SSN using NLP models tuned for accuracy.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">👁️</div>
+        <h3>Human-in-the-Loop Review</h3>
+        <p>You approve every redaction before it's applied. Add manual redactions by selecting text directly.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📋</div>
+        <h3>Full Audit Trail</h3>
+        <p>Every redaction session is logged with timestamp, reviewer name, approved and rejected entities.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">⚙️</div>
+        <h3>Configurable Engine</h3>
+        <p>Tune the confidence threshold, choose which entity types to target, and set a custom allow-list.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📁</div>
+        <h3>Batch Processing</h3>
+        <p>Queue multiple documents and process them in parallel — the app notifies you as each completes.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOWNLOAD CTA -->
+  <section class="cta-section" id="download">
+    <div class="section-label">Download</div>
+    <h2>Ready to redact smarter?</h2>
+    <p>Free. Local. No account required.</p>
+    <a href="https://github.com/m-umer-mustafa/redactor/releases/latest" class="btn-primary" id="cta-download-btn"
+      onclick="trackDownload()" target="_blank" rel="noopener">
+      ⬇ Download Redactor for Windows
+    </a>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <span>© 2026 The Redactor. Built for AI Product Development Course.</span>
+    <span>Local-first · Privacy-first · Open source</span>
+  </footer>
+
+</body>
+
+</html>

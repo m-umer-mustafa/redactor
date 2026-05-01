@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
 )
 
 from audit import AuditLogger, delete_history_entries, clear_all_history
+from analytics import AnalyticsClient, get_analytics
 from ui_components import (
     BackgroundProgressBanner,
     MultiFileDropZone,
@@ -979,6 +980,20 @@ class MainWindow(QMainWindow):
         self.audit_logger = AuditLogger()
         self.config.ensure_defaults()
 
+        # ── Analytics: initialise with credentials from config.json ──
+        # Add "ga4_measurement_id" and "ga4_api_secret" to config.json to activate.
+        # A persistent anonymous client_id is stored so sessions can be linked.
+        ga4_client_id = self.config.get_setting("ga4_client_id")
+        if not ga4_client_id:
+            ga4_client_id = str(uuid.uuid4())
+            self.config.update_settings({"ga4_client_id": ga4_client_id})
+        AnalyticsClient.initialise(
+            measurement_id=self.config.get_setting("ga4_measurement_id", "G-XXXXXXXXXX"),
+            api_secret=self.config.get_setting("ga4_api_secret", "YOUR_API_SECRET"),
+            client_id=ga4_client_id,
+        )
+        get_analytics().app_opened()
+
         self.batch_items = {}
         self.batch_order = []
         self.current_review_id = None
@@ -1199,6 +1214,11 @@ class MainWindow(QMainWindow):
             self.toast.show_toast("No supported files detected")
             return
 
+        # Analytics: track files added (one event per file)
+        for path in valid:
+            ext = os.path.splitext(path)[1].lower().lstrip(".")
+            get_analytics().file_added(file_extension=ext, file_count=len(valid))
+
         for path in valid:
             file_id = str(uuid.uuid4())
             name = os.path.basename(path)
@@ -1356,6 +1376,10 @@ class MainWindow(QMainWindow):
         self._persist_review_state()
         self.current_review_id = file_id
         self._load_review_page(file_id)
+        # Analytics: review opened — strong engagement signal
+        item = self.batch_items.get(file_id, {})
+        entity_count = len(item.get("snippets", []))
+        get_analytics().review_opened(entity_count=entity_count)
         self.navigate(self.PAGE_REVIEW)
 
     def _load_review_page(self, file_id: str):
@@ -1456,12 +1480,26 @@ class MainWindow(QMainWindow):
 
             reviewer = self.config.user_name() or "UnknownUser"
             self.audit_logger.append_entry(item["name"], reviewer, actions)
+
+            # Analytics: ★ PRIMARY KPI — full workflow completed (Task Completion Rate)
+            approved_count = sum(1 for a in actions if a["action"] == "APPROVED")
+            rejected_count = sum(1 for a in actions if a["action"] == "REJECTED")
+            ext = os.path.splitext(item["name"])[1].lower().lstrip(".")
+            get_analytics().export_saved(
+                approved_count=approved_count,
+                rejected_count=rejected_count,
+                file_extension=ext,
+            )
+
             self.toast.show_toast(f"Saved: {item['name']}")
             self._refresh_dashboard_stats()
             self._remove_batch_item(file_id)
         else:
             item["status"] = "Failed"
             self.batch_page.set_status(file_id, "Failed")
+            # Analytics: export failed — helps diagnose drop-off
+            ext = os.path.splitext(item.get("name", ""))[1].lower().lstrip(".")
+            get_analytics().export_failed(file_extension=ext)
             self.toast.show_toast(f"Save failed: {item['name']}")
 
         if not self.batch_items:
