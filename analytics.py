@@ -33,11 +33,11 @@ except ImportError:
     _MIXPANEL_AVAILABLE = False
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-# Replace these placeholders after you create your GA4 property.
-# You can also override them via config.json keys:
-#   "ga4_measurement_id" and "ga4_api_secret"
-GA4_MEASUREMENT_ID = "G-XXXXXXXXXX"   # e.g. G-ABC123DEF4
-GA4_API_SECRET = "YOUR_API_SECRET"    # from GA4 → Admin → Measurement Protocol secrets
+# Default properties. Can be overridden via config.json keys:
+#   "ga4_measurement_id", "ga4_api_secret", and "mixpanel_token"
+GA4_MEASUREMENT_ID = "G-S1MR2W37VM"
+GA4_API_SECRET = "aMG4hFD9T7WvKZo6DEckSA"
+MIXPANEL_TOKEN = "8f0e92980afd4b99f70e4e2a2b3f0839"
 
 GA4_ENDPOINT = (
     "https://www.google-analytics.com/mp/collect"
@@ -67,7 +67,7 @@ class AnalyticsClient:
         measurement_id: str = GA4_MEASUREMENT_ID,
         api_secret: str = GA4_API_SECRET,
         client_id: Optional[str] = None,
-        mixpanel_token: Optional[str] = None,
+        mixpanel_token: Optional[str] = MIXPANEL_TOKEN,
     ):
         self.measurement_id = measurement_id
         self.api_secret = api_secret
@@ -92,14 +92,17 @@ class AnalyticsClient:
     @classmethod
     def initialise(
         cls,
-        measurement_id: str,
-        api_secret: str,
+        measurement_id: Optional[str] = None,
+        api_secret: Optional[str] = None,
         client_id: Optional[str] = None,
         mixpanel_token: Optional[str] = None,
     ) -> "AnalyticsClient":
         """Call once at app startup with values from config.json."""
+        m_id = measurement_id if measurement_id else GA4_MEASUREMENT_ID
+        secret = api_secret if api_secret else GA4_API_SECRET
+        mp_token = mixpanel_token if mixpanel_token else MIXPANEL_TOKEN
         cls._instance = AnalyticsClient(
-            measurement_id, api_secret, client_id, mixpanel_token
+            m_id, secret, client_id, mp_token
         )
         return cls._instance
 

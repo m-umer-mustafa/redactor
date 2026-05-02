@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 
 class MultiFileDropZone(QFrame):
     filesDropped = pyqtSignal(list)
+    browseRequested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -33,8 +34,14 @@ class MultiFileDropZone(QFrame):
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setFont(QFont("Inter", 11))
 
+        self.browse_btn = QPushButton("Or Browse Files...")
+        self.browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.browse_btn.setStyleSheet("padding: 8px 16px; border-radius: 6px; background-color: palette(button); color: palette(button-text); margin-top: 10px; max-width: 200px;")
+        self.browse_btn.clicked.connect(self.browseRequested.emit)
+
         layout.addWidget(title)
         layout.addWidget(subtitle)
+        layout.addWidget(self.browse_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
     def _reset_style(self):
         self.setStyleSheet(

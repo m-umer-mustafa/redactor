@@ -29,6 +29,7 @@ if __name__ == '__main__':
         '--copy-metadata=presidio_analyzer',
         '--hidden-import=fitz',
         '--hidden-import=docx',
+        '--hidden-import=mixpanel',
         '--add-data=icon.ico;.'
     ])
     print("Build complete! Check the dist/Redactor folder.")

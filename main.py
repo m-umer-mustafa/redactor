@@ -272,6 +272,7 @@ class BatchPage(QWidget):
 
         self.dropzone = MultiFileDropZone()
         self.dropzone.filesDropped.connect(self.filesDropped.emit)
+        self.dropzone.browseRequested.connect(self._browse_files)
         self.dropzone.setMinimumHeight(140)
 
         self.table = QTableWidget(0, 6)
@@ -289,6 +290,16 @@ class BatchPage(QWidget):
 
         layout.addWidget(self.dropzone)
         layout.addWidget(self.table)
+
+    def _browse_files(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Documents",
+            "",
+            "Documents (*.pdf *.docx)"
+        )
+        if files:
+            self.filesDropped.emit(files)
 
     def add_file_row(self, file_id: str, file_name: str, full_path: str):
         row = self.table.rowCount()
