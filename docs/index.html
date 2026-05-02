@@ -11,7 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
     rel="stylesheet" />
 
-  <!-- GA4 Tag — replace G-XXXXXXXXXX with your real Measurement ID -->
+  <!-- GA4 Tag -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-S1MR2W37VM"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
@@ -22,7 +22,7 @@
     function trackDownload() {
       gtag('event', 'download_click', {
         event_category: 'engagement',
-        event_label: 'hero_download_button'
+        event_label: 'installer_download'
       });
     }
   </script>
@@ -660,7 +660,8 @@
       with a human review step before anything is applied. Everything runs on your machine.
     </p>
     <div class="hero-actions">
-      <a href="#download" class="btn-primary" id="hero-download-btn" onclick="trackDownload()">
+      <a href="https://github.com/m-umer-mustafa/redactor/releases/latest/download/Redactor_Setup.exe"
+        class="btn-primary" id="hero-download-btn" onclick="trackDownload()" download>
         ⬇ Download for Windows
       </a>
       <a href="#how-it-works" class="btn-ghost">See how it works →</a>
@@ -813,8 +814,8 @@
     <div class="section-label">Download</div>
     <h2>Ready to redact smarter?</h2>
     <p>Free. Local. No account required.</p>
-    <a href="https://github.com/m-umer-mustafa/redactor/releases/latest" class="btn-primary" id="cta-download-btn"
-      onclick="trackDownload()" target="_blank" rel="noopener">
+    <a href="https://github.com/m-umer-mustafa/redactor/releases/latest/download/Redactor_Setup.exe"
+      class="btn-primary" id="cta-download-btn" onclick="trackDownload()" download>
       ⬇ Download Redactor for Windows
     </a>
   </section>

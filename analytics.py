@@ -1,18 +1,15 @@
 """
-analytics.py — GA4 Measurement Protocol integration for The Redactor.
+analytics.py — Dual analytics integration for The Redactor.
 
-Events are fired in a background thread so they never block the UI.
-All calls fail silently if the network is unavailable — offline use is
-preserved at all times.
+Sends events to TWO backends simultaneously:
+  1. GA4 Measurement Protocol  — landing page funnel continuity
+  2. Mixpanel Python SDK        — real-time desktop app event visibility
 
-To activate analytics:
-  1. Create a GA4 property at https://analytics.google.com
-  2. Go to Admin → Data Streams → your stream → Measurement Protocol API secrets
-  3. Create an API secret and copy the value
-  4. Set GA4_MEASUREMENT_ID and GA4_API_SECRET below (or pass via config.json)
+All calls fire in background threads and fail silently.
+Offline use is fully preserved.
 
 Event catalogue (mapped to Phase 4B KPIs):
-  app_opened          — session start (retention signal)
+  app_opened          — session start (retention / DAU signal)
   onboarding_complete — user completed first-run setup
   file_added          — file dropped into batch queue
   analysis_complete   — ML engine finished PII detection
@@ -28,6 +25,12 @@ import uuid
 from typing import Optional
 from urllib import request as urllib_request
 from urllib.error import URLError
+
+try:
+    from mixpanel import Mixpanel as _MixpanelSDK
+    _MIXPANEL_AVAILABLE = True
+except ImportError:
+    _MIXPANEL_AVAILABLE = False
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 # Replace these placeholders after you create your GA4 property.
@@ -54,6 +57,7 @@ class AnalyticsClient:
     """
     Singleton analytics client. Initialise once with optional config overrides,
     then call .track(event_name, params) anywhere in the app.
+    Sends to GA4 (Measurement Protocol) AND Mixpanel simultaneously.
     """
 
     _instance: Optional["AnalyticsClient"] = None
@@ -63,6 +67,7 @@ class AnalyticsClient:
         measurement_id: str = GA4_MEASUREMENT_ID,
         api_secret: str = GA4_API_SECRET,
         client_id: Optional[str] = None,
+        mixpanel_token: Optional[str] = None,
     ):
         self.measurement_id = measurement_id
         self.api_secret = api_secret
@@ -73,6 +78,10 @@ class AnalyticsClient:
             and self.measurement_id != "G-XXXXXXXXXX"
             and self.api_secret != "YOUR_API_SECRET"
         )
+        # Mixpanel — real-time event visibility for desktop app
+        self._mp = None
+        if _MIXPANEL_AVAILABLE and mixpanel_token:
+            self._mp = _MixpanelSDK(mixpanel_token)
 
     @classmethod
     def get_instance(cls) -> "AnalyticsClient":
@@ -86,28 +95,35 @@ class AnalyticsClient:
         measurement_id: str,
         api_secret: str,
         client_id: Optional[str] = None,
+        mixpanel_token: Optional[str] = None,
     ) -> "AnalyticsClient":
         """Call once at app startup with values from config.json."""
-        cls._instance = AnalyticsClient(measurement_id, api_secret, client_id)
+        cls._instance = AnalyticsClient(
+            measurement_id, api_secret, client_id, mixpanel_token
+        )
         return cls._instance
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def track(self, event_name: str, params: Optional[dict] = None) -> None:
         """
-        Fire a GA4 event in a background thread.
+        Fire an event to GA4 + Mixpanel in background threads.
         Fails silently — never raises, never blocks the UI.
         """
-        if not self._enabled:
-            return
-        payload = self._build_payload(event_name, params or {})
-        thread = threading.Thread(
-            target=self._send,
-            args=(payload,),
-            daemon=True,
-            name=f"ga4-{event_name}",
-        )
-        thread.start()
+        p = params or {}
+        # GA4 Measurement Protocol
+        if self._enabled:
+            payload = self._build_payload(event_name, p)
+            threading.Thread(
+                target=self._send, args=(payload,),
+                daemon=True, name=f"ga4-{event_name}"
+            ).start()
+        # Mixpanel — real-time visibility
+        if self._mp is not None:
+            threading.Thread(
+                target=self._send_mixpanel, args=(event_name, p),
+                daemon=True, name=f"mp-{event_name}"
+            ).start()
 
     # ── Convenience event methods (match Phase 4B KPIs) ───────────────────────
 
@@ -171,6 +187,9 @@ class AnalyticsClient:
     def _build_payload(self, event_name: str, params: dict) -> bytes:
         body = {
             "client_id": self.client_id,
+            # debug_mode makes events appear in GA4 DebugView
+            # (Realtime does not reliably show Measurement Protocol events)
+            "debug_mode": 1,
             "events": [
                 {
                     "name": event_name,
@@ -196,9 +215,16 @@ class AnalyticsClient:
                 method="POST",
             )
             with urllib_request.urlopen(req, timeout=REQUEST_TIMEOUT):
-                pass  # GA4 Measurement Protocol returns 204 No Content on success
+                pass  # GA4 returns 204 No Content on success
         except (URLError, OSError):
-            pass  # Network unavailable — fail silently, preserve offline use
+            pass  # Network unavailable — fail silently
+
+    def _send_mixpanel(self, event_name: str, params: dict) -> None:
+        """Send event to Mixpanel. Shows instantly in Mixpanel Live View."""
+        try:
+            self._mp.track(self.client_id, event_name, params)
+        except Exception:
+            pass  # Fail silently — never block the UI
 
 
 # ─── Module-level convenience accessor ────────────────────────────────────────

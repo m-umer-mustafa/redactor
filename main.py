@@ -991,6 +991,7 @@ class MainWindow(QMainWindow):
             measurement_id=self.config.get_setting("ga4_measurement_id", "G-XXXXXXXXXX"),
             api_secret=self.config.get_setting("ga4_api_secret", "YOUR_API_SECRET"),
             client_id=ga4_client_id,
+            mixpanel_token=self.config.get_setting("mixpanel_token"),
         )
         get_analytics().app_opened()
 
