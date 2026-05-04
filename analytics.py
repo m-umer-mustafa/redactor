@@ -3,7 +3,7 @@ analytics.py — Dual analytics integration for The Redactor.
 
 Sends events to TWO backends simultaneously:
   1. GA4 Measurement Protocol  — landing page funnel continuity
-  2. Mixpanel Python SDK        — real-time desktop app event visibility
+  2. Mixpanel Direct API       — real-time desktop app event visibility (Zero Dependencies)
 
 All calls fire in background threads and fail silently.
 Offline use is fully preserved.
@@ -22,15 +22,13 @@ Event catalogue (mapped to Phase 4B KPIs):
 import json
 import threading
 import uuid
+import base64
+import time
+import sys
 from typing import Optional
 from urllib import request as urllib_request
+from urllib import parse as urllib_parse
 from urllib.error import URLError
-
-try:
-    from mixpanel import Mixpanel as _MixpanelSDK
-    _MIXPANEL_AVAILABLE = True
-except ImportError:
-    _MIXPANEL_AVAILABLE = False
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 # Default properties. Can be overridden via config.json keys:
@@ -43,6 +41,7 @@ GA4_ENDPOINT = (
     "https://www.google-analytics.com/mp/collect"
     "?measurement_id={measurement_id}&api_secret={api_secret}"
 )
+MIXPANEL_ENDPOINT = "https://api.mixpanel.com/track"
 
 # Set to False to disable all analytics (e.g. in CI / testing)
 ANALYTICS_ENABLED = True
@@ -71,6 +70,7 @@ class AnalyticsClient:
     ):
         self.measurement_id = measurement_id
         self.api_secret = api_secret
+        self.mixpanel_token = mixpanel_token
         # Persistent anonymous client ID (stored in config.json as "ga4_client_id")
         self.client_id = client_id or str(uuid.uuid4())
         self._enabled = (
@@ -78,10 +78,6 @@ class AnalyticsClient:
             and self.measurement_id != "G-XXXXXXXXXX"
             and self.api_secret != "YOUR_API_SECRET"
         )
-        # Mixpanel — real-time event visibility for desktop app
-        self._mp = None
-        if _MIXPANEL_AVAILABLE and mixpanel_token:
-            self._mp = _MixpanelSDK(mixpanel_token)
 
     @classmethod
     def get_instance(cls) -> "AnalyticsClient":
@@ -118,11 +114,12 @@ class AnalyticsClient:
         if self._enabled:
             payload = self._build_payload(event_name, p)
             threading.Thread(
-                target=self._send, args=(payload,),
+                target=self._send_ga4, args=(payload,),
                 daemon=True, name=f"ga4-{event_name}"
             ).start()
-        # Mixpanel — real-time visibility
-        if self._mp is not None:
+        
+        # Mixpanel Direct API Call
+        if self.mixpanel_token:
             threading.Thread(
                 target=self._send_mixpanel, args=(event_name, p),
                 daemon=True, name=f"mp-{event_name}"
@@ -205,7 +202,7 @@ class AnalyticsClient:
         }
         return json.dumps(body).encode("utf-8")
 
-    def _send(self, payload: bytes) -> None:
+    def _send_ga4(self, payload: bytes) -> None:
         try:
             url = GA4_ENDPOINT.format(
                 measurement_id=self.measurement_id,
@@ -223,9 +220,43 @@ class AnalyticsClient:
             pass  # Network unavailable — fail silently
 
     def _send_mixpanel(self, event_name: str, params: dict) -> None:
-        """Send event to Mixpanel. Shows instantly in Mixpanel Live View."""
+        """Send event to Mixpanel using direct urllib for maximum reliability."""
         try:
-            self._mp.track(self.client_id, event_name, params)
+            # Add Mixpanel special properties
+            # Note: properties must include 'token' and 'distinct_id'
+            properties = {
+                "token": self.mixpanel_token,
+                "distinct_id": self.client_id,
+                "time": int(time.time()),
+                "$insert_id": uuid.uuid4().hex,
+                "mp_lib": "python-urllib",
+            }
+            properties.update(params)
+            
+            payload = {
+                "event": event_name,
+                "properties": properties
+            }
+            
+            # Mixpanel prefers base64 encoded JSON for the 'data' parameter
+            data_json = json.dumps(payload).encode("utf-8")
+            encoded_data = base64.b64encode(data_json).decode("utf-8")
+            
+            # verbose=1 makes Mixpanel return a JSON object with status
+            post_params = {
+                "data": encoded_data,
+                "verbose": 1,
+                "ip": 0
+            }
+            encoded_params = urllib_parse.urlencode(post_params).encode("utf-8")
+            
+            req = urllib_request.Request(MIXPANEL_ENDPOINT, data=encoded_params, method="POST")
+            with urllib_request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+                resp_body = response.read().decode("utf-8")
+                resp_json = json.loads(resp_body)
+                if resp_json.get("status") != 1:
+                    # In production, we fail silently, but we can print to stderr for debug
+                    print(f"Mixpanel API Error: {resp_json.get('error')}", file=sys.stderr)
         except Exception:
             pass  # Fail silently — never block the UI
 
