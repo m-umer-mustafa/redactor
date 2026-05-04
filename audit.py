@@ -1,10 +1,20 @@
 import json
 import os
+import sys
 import datetime
 from typing import List, Dict, Any
 
 
-DEFAULT_LOG_DIR = "audit_data"
+def get_audit_dir() -> str:
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(base, "Redactor", "audit_data")
+
+DEFAULT_LOG_DIR = get_audit_dir()
 DEFAULT_LOG_FILE = os.path.join(DEFAULT_LOG_DIR, "redaction_audit_log.json")
 
 
@@ -58,8 +68,8 @@ class AuditLogger:
     Records every detected PII entity and whether a human approved or rejected it.
     """
 
-    def __init__(self, log_dir: str = "audit_data"):
-        self.log_dir = log_dir
+    def __init__(self, log_dir: str = None):
+        self.log_dir = log_dir or DEFAULT_LOG_DIR
         os.makedirs(self.log_dir, exist_ok=True)
         self.log_file = os.path.join(self.log_dir, "redaction_audit_log.json")
 

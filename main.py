@@ -38,13 +38,14 @@ from PyQt6.QtWidgets import (
     QMenu,
 )
 
-from audit import AuditLogger, delete_history_entries, clear_all_history
+from audit import AuditLogger, delete_history_entries, clear_all_history, DEFAULT_LOG_FILE
 from analytics import AnalyticsClient, get_analytics
 from ui_components import (
     BackgroundProgressBanner,
     MultiFileDropZone,
     RowActionWidget,
     ToastNotification,
+    WalkthroughOverlay,
 )
 from worker import RedactionWorker, ApplyRedactionWorker
 
@@ -68,7 +69,20 @@ multiprocessing.cpu_count = lambda: 1
 
 
 class AppConfig:
-    def __init__(self, path: str = "config.json"):
+    def __init__(self, path: str = None):
+        if path is None:
+            if os.path.exists("config.json"):
+                path = "config.json"
+            else:
+                if sys.platform == "win32":
+                    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+                elif sys.platform == "darwin":
+                    base = os.path.expanduser("~/Library/Application Support")
+                else:
+                    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+                app_dir = os.path.join(base, "Redactor")
+                os.makedirs(app_dir, exist_ok=True)
+                path = os.path.join(app_dir, "config.json")
         self.path = path
         self.data = {}
         self.load()
@@ -165,18 +179,23 @@ class SidebarButton(QPushButton):
             """
             QPushButton {
                 text-align: left;
-                padding: 10px 12px;
+                padding: 12px 16px;
                 border-radius: 8px;
-                color: palette(button-text);
+                color: #94A3B8;
                 background-color: transparent;
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+                font-size: 14px;
+                font-weight: 500;
+                border: none;
             }
             QPushButton:checked {
-                background-color: palette(highlight);
-                color: palette(highlighted-text);
-                font-weight: bold;
+                background-color: rgba(59, 130, 246, 0.15);
+                color: #3B82F6;
+                font-weight: 600;
             }
             QPushButton:hover:!checked {
-                background-color: rgba(127, 127, 127, 0.16);
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #F8FAFC;
             }
             """
         )
@@ -219,6 +238,7 @@ class OnboardingPage(QWidget):
 
 class DashboardPage(QWidget):
     startBatchRequested = pyqtSignal()
+    howItWorksRequested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -236,7 +256,7 @@ class DashboardPage(QWidget):
         for widget in (self.total_files, self.total_approved, self.total_rejected):
             panel = QFrame()
             panel.setStyleSheet(
-                "background-color: palette(base); border: 1px solid palette(mid); border-radius: 10px;"
+                "background-color: #1A1D27; border: 1px solid #2A2F3D; border-radius: 12px; padding: 6px;"
             )
             p_layout = QVBoxLayout(panel)
             p_layout.addWidget(widget)
@@ -244,10 +264,19 @@ class DashboardPage(QWidget):
 
         self.start_btn = QPushButton("Start New Batch")
         self.start_btn.clicked.connect(self.startBatchRequested.emit)
+        
+        self.how_btn = QPushButton("How It Works")
+        self.how_btn.clicked.connect(self.howItWorksRequested.emit)
+        self.how_btn.setStyleSheet("background-color: transparent; border: 1px solid #3B82F6; color: #3B82F6;")
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.how_btn)
+        btn_layout.addStretch()
 
         layout.addWidget(self.greeting)
         layout.addLayout(stats_row)
-        layout.addWidget(self.start_btn)
+        layout.addLayout(btn_layout)
         layout.addStretch()
 
     def set_user(self, name: str):
@@ -285,6 +314,7 @@ class BatchPage(QWidget):
         self.table.setColumnHidden(4, True)
         self.table.setColumnHidden(5, True)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(48)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
@@ -394,6 +424,7 @@ class HistoryPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(48)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
 
@@ -1016,6 +1047,9 @@ class MainWindow(QMainWindow):
 
         self.toast = ToastNotification(self)
 
+        self.walkthrough_overlay = WalkthroughOverlay(self)
+        self.walkthrough_step = 0
+
         root = QWidget()
         self.setCentralWidget(root)
         main_layout = QHBoxLayout(root)
@@ -1073,8 +1107,9 @@ class MainWindow(QMainWindow):
 
     def _build_sidebar(self) -> QWidget:
         panel = QFrame()
+        panel.setObjectName("Sidebar")
         panel.setFixedWidth(230)
-        panel.setStyleSheet("background-color: palette(window); border-right: 1px solid palette(mid);")
+        panel.setStyleSheet("background-color: #13161F; border-right: 1px solid #202432;")
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(16, 22, 16, 16)
@@ -1106,6 +1141,7 @@ class MainWindow(QMainWindow):
 
         self.onboarding_page.completed.connect(self._complete_onboarding)
         self.dashboard_page.startBatchRequested.connect(lambda: self.navigate(self.PAGE_BATCH))
+        self.dashboard_page.howItWorksRequested.connect(self._show_walkthrough)
 
         self.batch_page.filesDropped.connect(self._enqueue_files)
         self.batch_page.reviewRequested.connect(self._open_review)
@@ -1143,6 +1179,48 @@ class MainWindow(QMainWindow):
         self.dashboard_page.set_user(name)
         self.navigate(self.PAGE_DASHBOARD)
         self.toast.show_toast(f"Welcome, {name}")
+        self._show_walkthrough()
+
+    def _show_walkthrough(self):
+        self.walkthrough_step = 1
+        try:
+            self.walkthrough_overlay.completed.disconnect()
+        except TypeError:
+            pass
+        self.walkthrough_overlay.completed.connect(self._next_walkthrough_step)
+        
+        self.navigate(self.PAGE_DASHBOARD)
+        QTimer.singleShot(100, self._run_walkthrough_step1)
+
+    def _run_walkthrough_step1(self):
+        self.walkthrough_overlay.set_target(
+            self.dashboard_page.start_btn, 
+            "Step 1: Click 'Start New Batch' to begin.", 
+            "Got it"
+        )
+
+    def _next_walkthrough_step(self):
+        self.walkthrough_overlay.hide()
+        if self.walkthrough_step == 1:
+            self.walkthrough_step = 2
+            self.dashboard_page.startBatchRequested.emit()
+            QTimer.singleShot(100, self._run_walkthrough_step2)
+        elif self.walkthrough_step == 2:
+            self.walkthrough_step = 3
+            self.walkthrough_overlay.set_target(
+                self.batch_page.dropzone.browse_btn, 
+                "Step 3: You can also click here to browse for files.", 
+                "Finish"
+            )
+        else:
+            self.walkthrough_step = 0
+            
+    def _run_walkthrough_step2(self):
+        self.walkthrough_overlay.set_target(
+            self.batch_page.dropzone, 
+            "Step 2: Drag and drop your sensitive documents here.", 
+            "Next"
+        )
 
     def navigate(self, page_index: int):
         self.stack.setCurrentIndex(page_index)
@@ -1520,7 +1598,7 @@ class MainWindow(QMainWindow):
         self._update_banner_visibility()
 
     def _load_audit_entries(self) -> list:
-        log_path = os.path.join("audit_data", "redaction_audit_log.json")
+        log_path = DEFAULT_LOG_FILE
         if not os.path.exists(log_path):
             return []
         with open(log_path, "r", encoding="utf-8") as f:
@@ -1591,10 +1669,52 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
 
     app = QApplication(sys.argv)
-    if hasattr(qdarktheme, "setup_theme"):
-        qdarktheme.setup_theme("dark")
-    else:
-        app.setStyleSheet(qdarktheme.load_stylesheet("dark"))
+    custom_colors = {
+        "[dark]": {
+            "primary": "#3B82F6",
+            "background": "#0F1117",
+            "base": "#1A1D27",
+            "border": "#2A2F3D"
+        }
+    }
+    
+    custom_css = """
+        QMainWindow, QStackedWidget { background-color: #0F1117; }
+        #Sidebar { background-color: #13161F; border-right: 1px solid #202432; }
+        QFrame { border: none; }
+        QPushButton { 
+            background-color: #3B82F6; 
+            color: white; 
+            border-radius: 6px; 
+            padding: 8px 16px; 
+            font-weight: 600; 
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            border: none; 
+        }
+        QPushButton:hover { background-color: #2563EB; }
+        QPushButton:pressed { background-color: #1D4ED8; }
+        QListWidget, QTableWidget, QTextEdit { 
+            background-color: #151822; 
+            border: 1px solid #2A2F3D; 
+            color: #E2E8F0; 
+            border-radius: 6px;
+        }
+        QLabel { color: #F8FAFC; font-family: 'Inter', 'Segoe UI', sans-serif; }
+        QLineEdit, QComboBox, QSpinBox { 
+            background-color: #151822; 
+            border: 1px solid #2A2F3D; 
+            color: #F8FAFC; 
+            border-radius: 6px; 
+            padding: 6px 10px; 
+        }
+    """
+
+    try:
+        base_css = qdarktheme.load_stylesheet("dark", custom_colors=custom_colors)
+    except TypeError:
+        base_css = qdarktheme.load_stylesheet("dark")
+        
+    app.setStyleSheet(base_css + custom_css)
     app.setFont(QFont("Inter", 10))
 
     window = MainWindow()
