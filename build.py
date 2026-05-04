@@ -29,6 +29,9 @@ if __name__ == '__main__':
         '--copy-metadata=presidio_analyzer',
         '--hidden-import=fitz',
         '--hidden-import=docx',
+        '--exclude-module=torch',
+        '--exclude-module=tensorflow',
+        '--exclude-module=tensorboard',
         '--add-data=icon.ico;.'
     ])
     print("Build complete! Check the dist/Redactor folder.")
