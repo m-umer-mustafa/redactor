@@ -34,4 +34,23 @@ if __name__ == '__main__':
         '--exclude-module=tensorboard',
         '--add-data=icon.ico;.'
     ])
+
+    # Brute-force cleanup of problematic heavy libraries that we DON'T need
+    # This ensures they are never bundled even if sub-dependencies pull them in
+    internal_dir = os.path.join('dist', 'Redactor', '_internal')
+    if os.path.exists(internal_dir):
+        import shutil
+        to_delete = ['torch', 'tensorflow', 'tensorboard', 'torchvision', 'torchaudio', 'nvidia']
+        for lib in to_delete:
+            lib_path = os.path.join(internal_dir, lib)
+            if os.path.exists(lib_path):
+                print(f"Cleaning up: {lib}...")
+                shutil.rmtree(lib_path, ignore_errors=True)
+            # Also check for .py files or .pyd files starting with these names
+            for item in os.listdir(internal_dir):
+                if any(item.startswith(l) for l in to_delete):
+                    item_path = os.path.join(internal_dir, item)
+                    if os.path.isfile(item_path):
+                        os.remove(item_path)
+
     print("Build complete! Check the dist/Redactor folder.")

@@ -36,6 +36,8 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QMenu,
+    QDialog,
+    QMessageBox,
 )
 
 from audit import AuditLogger, delete_history_entries, clear_all_history, DEFAULT_LOG_FILE
@@ -48,6 +50,7 @@ from ui_components import (
     WalkthroughOverlay,
 )
 from worker import RedactionWorker, ApplyRedactionWorker
+from licensing import LicenseManager
 
 
 if __name__ == "__main__":
@@ -143,6 +146,9 @@ class AppConfig:
             "redaction_style": "[REDACTED]",
             "file_suffix": "_REDACTED",
             "max_concurrent_files": 2,
+            "license_key": "",
+            "license_tier": "Free",
+            "activation_token": ""
         }
         changed = False
         for key, value in defaults.items():
@@ -199,6 +205,65 @@ class SidebarButton(QPushButton):
             }
             """
         )
+
+
+class LicenseDialog(QDialog):
+    def __init__(self, current_tier="Free", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Unlock Professional Features")
+        self.setFixedWidth(450)
+        self.license_manager = LicenseManager()
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        title = QLabel("Activate Your License")
+        title.setFont(QFont("Inter", 18, QFont.Weight.Bold))
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "Redactor Solo and Pro features require an active license.\n"
+            "Please enter your key below to unlock the application."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #94A3B8;")
+        layout.addWidget(desc)
+
+        self.key_input = QLineEdit()
+        self.key_input.setPlaceholderText("XXXX-XXXX-XXXX-XXXX")
+        self.key_input.setStyleSheet(
+            "padding: 10px; border: 1px solid #334155; border-radius: 6px; background: #0F172A;"
+        )
+        layout.addWidget(self.key_input)
+
+        self.btn_activate = QPushButton("Activate Pro Features")
+        self.btn_activate.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_activate.setStyleSheet(
+            "padding: 12px; background-color: #3B82F6; color: white; font-weight: 600; border-radius: 6px;"
+        )
+        self.btn_activate.clicked.connect(self.handle_activation)
+        layout.addWidget(self.btn_activate)
+
+        buy_label = QLabel("<a href='https://theredactor.netlify.app/#pricing' style='color: #3B82F6; text-decoration: none;'>Don't have a key? Buy one here.</a>")
+        buy_label.setOpenExternalLinks(True)
+        buy_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(buy_label)
+
+    def handle_activation(self):
+        key = self.key_input.text().strip()
+        if not key:
+            return
+
+        success, tier, message = self.license_manager.activate_online(key)
+        
+        if success:
+            QMessageBox.information(self, "Success", message)
+            self.tier = tier
+            self.license_key = key
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Activation Failed", message)
 
 
 class OnboardingPage(QWidget):
@@ -552,6 +617,17 @@ class SettingsView(QWidget):
         det_label.setFont(QFont("Inter", 12, QFont.Weight.Bold))
         form.addWidget(det_label)
 
+        # License Status Row
+        status_row = QHBoxLayout()
+        self.tier_badge = QLabel("FREE TIER")
+        self.tier_badge.setStyleSheet(
+            "padding: 4px 8px; background: #334155; color: #94A3B8; border-radius: 4px; font-weight: bold; font-size: 10px;"
+        )
+        status_row.addWidget(QLabel("Current Plan:"))
+        status_row.addWidget(self.tier_badge)
+        status_row.addStretch()
+        form.addLayout(status_row)
+
         threshold_row = QHBoxLayout()
         threshold_row.addWidget(QLabel("Confidence Threshold"))
         self.threshold_value = QLabel("0.60")
@@ -566,8 +642,12 @@ class SettingsView(QWidget):
         form.addWidget(QLabel("Target Entities"))
         entity_grid = QGridLayout()
         self.entity_checks = {}
+        pro_entities = {"US_SSN"}
         for idx, entity in enumerate(self.ENTITY_CHOICES):
-            cb = QCheckBox(entity)
+            label_text = entity
+            if entity in pro_entities:
+                label_text += " (PRO)"
+            cb = QCheckBox(label_text)
             cb.setChecked(True)
             self.entity_checks[entity] = cb
             entity_grid.addWidget(cb, idx // 3, idx % 3)
@@ -715,9 +795,24 @@ class SettingsView(QWidget):
         self.threshold_slider.setValue(int(float(config.get_setting("confidence_threshold", 0.6)) * 100))
         self._update_threshold_label()
 
+        current_tier = config.get_setting("license_tier", "Free")
+        self.tier_badge.setText(f"{current_tier.upper()} PLAN")
+        if current_tier == "Free":
+            self.tier_badge.setStyleSheet("padding: 4px 8px; background: #334155; color: #94A3B8; border-radius: 4px; font-weight: bold; font-size: 10px;")
+        else:
+            self.tier_badge.setStyleSheet("padding: 4px 8px; background: #1E3A8A; color: #3B82F6; border-radius: 4px; font-weight: bold; font-size: 10px;")
+
         selected_entities = set(config.get_setting("target_entities", self.ENTITY_CHOICES))
+        pro_entities = {"US_SSN"}
         for entity, cb in self.entity_checks.items():
             cb.setChecked(entity in selected_entities)
+            if entity in pro_entities and current_tier == "Free":
+                cb.setEnabled(False)
+                cb.setChecked(False)
+                cb.setToolTip("Upgrade to Pro to unlock sensitive entity detection")
+            else:
+                cb.setEnabled(True)
+                cb.setToolTip("")
 
         allow_list = config.get_setting("custom_allow_list", [])
         self.allow_list_edit.setPlainText(", ".join(allow_list))
@@ -1009,7 +1104,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("The Redactor")
+        self.setWindowTitle("The Redactor v0.1.2 (Stable)")
         self.setMinimumSize(800, 600)
 
         icon_path = os.path.join(os.path.dirname(__file__), "icon.ico")
@@ -1089,6 +1184,26 @@ class MainWindow(QMainWindow):
         self._apply_performance_settings_from_config()
         self._route_initial_page()
         self._refresh_dashboard_stats()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Force license check on startup for Paid-Only model
+        if self.config.get_setting("license_tier", "Free") == "Free":
+            self.show_license_dialog()
+
+    def show_license_dialog(self):
+        dialog = LicenseDialog(self.config.get_setting("license_tier", "Free"), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.config.update_settings({
+                "license_key": dialog.license_key,
+                "license_tier": dialog.tier
+            })
+            self.toast.show_toast(f"Plan Activated: {dialog.tier}")
+            if self.stack.currentIndex() == self.PAGE_SETTINGS:
+                self.settings_page.load_from_config(self.config)
+        else:
+            # Hard Lock: Exit if no license is provided
+            sys.exit(0)
 
     def _setup_responsive_window_geometry(self):
         screen = QGuiApplication.primaryScreen()
@@ -1303,6 +1418,25 @@ class MainWindow(QMainWindow):
         if not valid:
             self.toast.show_toast("No supported files detected")
             return
+
+        # Tier Enforcement: Free tier only allows 1 file at a time
+        current_tier = self.config.get_setting("license_tier", "Free")
+        existing_count = len(self.batch_items)
+        if current_tier == "Free" and (len(valid) + existing_count) > 1:
+            dialog = LicenseDialog(current_tier, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # Update config with new tier and proceed
+                self.config.update_settings({
+                    "license_key": dialog.license_key,
+                    "license_tier": dialog.tier
+                })
+                self.toast.show_toast(f"Upgraded to {dialog.tier}!")
+            else:
+                self.toast.show_toast("Free tier is limited to 1 file. Upgrade for batch processing.")
+                # Only keep the first file if they didn't upgrade
+                valid = valid[:1] if existing_count == 0 else []
+                if not valid:
+                    return
 
         # Analytics: track files added (one event per file)
         for path in valid:

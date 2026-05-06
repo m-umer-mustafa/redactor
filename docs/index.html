@@ -613,6 +613,121 @@
       font-size: .82rem;
     }
 
+    /* ── PRICING ── */
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+      margin-top: 40px;
+    }
+
+    .pricing-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 40px 32px;
+      display: flex;
+      flex-direction: column;
+      transition: transform .3s, border-color .3s;
+      position: relative;
+    }
+
+    .pricing-card.popular {
+      border-color: var(--accent);
+      box-shadow: 0 20px 40px rgba(192, 57, 43, 0.1);
+    }
+
+    .pricing-card.popular::after {
+      content: 'MOST POPULAR';
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: white;
+      font-size: 0.7rem;
+      font-weight: 800;
+      padding: 4px 12px;
+      border-radius: 20px;
+      letter-spacing: 0.05em;
+    }
+
+    .pricing-card:hover {
+      transform: translateY(-8px);
+      border-color: var(--accent2);
+    }
+
+    .pricing-tier {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--accent2);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+    }
+
+    .pricing-price {
+      font-size: 2.5rem;
+      font-weight: 900;
+      margin-bottom: 24px;
+    }
+
+    .pricing-price span {
+      font-size: 1rem;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .pricing-features {
+      list-style: none;
+      margin-bottom: 40px;
+      flex-grow: 1;
+    }
+
+    .pricing-features li {
+      margin-bottom: 12px;
+      font-size: 0.95rem;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pricing-features li svg {
+      color: #4caf50;
+      flex-shrink: 0;
+    }
+
+    .btn-pricing {
+      display: block;
+      text-align: center;
+      padding: 14px;
+      border-radius: 10px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .btn-pricing.primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-pricing.primary:hover {
+      background: var(--accent2);
+      box-shadow: 0 10px 20px var(--accent-glow);
+    }
+
+    .btn-pricing.outline {
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .btn-pricing.outline:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--dim);
+    }
+
     @media (max-width: 640px) {
       nav {
         padding: 0 5%;
@@ -644,7 +759,8 @@
     <ul class="nav-links">
       <li><a href="#how-it-works">How It Works</a></li>
       <li><a href="#features">Features</a></li>
-      <li><a href="#download">Download</a></li>
+      <li><a href="#pricing">Pricing</a></li>
+      <li><a href="https://whop.com/hub/" target="_blank">Manage Subscription</a></li>
     </ul>
     <a href="#download" class="nav-cta" onclick="trackDownload()">Download Free</a>
   </nav>
@@ -722,6 +838,90 @@
             have been redacted. All parties agree to the terms set forth herein...
           </div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section class="section" id="pricing">
+    <div class="section-label">Pricing</div>
+    <h2>Scale your compliance.</h2>
+    <p class="section-sub">Choose a plan that fits your firm's volume and security needs.</p>
+    
+    <div class="pricing-grid">
+      <!-- Solo -->
+      <div class="pricing-card">
+        <div class="pricing-tier">Solo</div>
+        <div class="pricing-price">$19<span>/mo</span></div>
+        <ul class="pricing-features">
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Single user license
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Standard PII Detection
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            PDF & DOCX Support
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Local Audit Logs
+          </li>
+        </ul>
+        <a href="https://whop.com/checkout/plan_atXvSc16jpYEH" class="btn-pricing outline">Get Started</a>
+      </div>
+
+      <!-- Boutique -->
+      <div class="pricing-card popular">
+        <div class="pricing-tier">Boutique</div>
+        <div class="pricing-price">$49<span>/mo</span></div>
+        <ul class="pricing-features">
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Up to 5 users
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            <strong>Batch Processing</strong>
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Advanced Entities (SSN, etc.)
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Priority Support
+          </li>
+        </ul>
+        <a href="https://whop.com/checkout/plan_0tJfwV1A2QZMa" class="btn-pricing primary">Upgrade to Pro</a>
+      </div>
+
+      <!-- Enterprise -->
+      <div class="pricing-card">
+        <div class="pricing-tier">Enterprise</div>
+        <div class="pricing-price">Custom</div>
+        <ul class="pricing-features">
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Unlimited users
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.41 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            OCR for Scanned Docs
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            White-glove deployment
+          </li>
+          <li>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Dedicated Success Manager
+          </li>
+        </ul>
+        <a href="mailto:saadabdullah1124@gmail.com" class="btn-pricing outline">Contact Sales</a>
       </div>
     </div>
   </section>
@@ -820,7 +1020,39 @@
     </a>
   </section>
 
-  <!-- FOOTER -->
+  <!-- BILLING HELP -->
+  <section class="section" id="billing-help" style="background: var(--bg-alt);">
+    <div class="section-label">Support</div>
+    <h2>Billing & Subscriptions</h2>
+    <p class="section-sub">Everything you need to know about your Redactor account.</p>
+
+    <div class="faq-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 60px; max-width: 1000px; margin-left: auto; margin-right: auto; text-align: left;">
+      <div class="faq-item">
+        <h4 style="color: var(--accent); margin-bottom: 12px;">How does recurring billing work?</h4>
+        <p style="color: #94A3B8; font-size: 0.95rem; line-height: 1.6;">
+          Your subscription is billed monthly via **Whop**, our secure payment partner. You will be charged on the same day every month. If you started with a 7-day free trial, your first billing cycle begins immediately after the trial ends.
+        </p>
+      </div>
+      <div class="faq-item">
+        <h4 style="color: var(--accent); margin-bottom: 12px;">How do I cancel my subscription?</h4>
+        <p style="color: #94A3B8; font-size: 0.95rem; line-height: 1.6;">
+          You can cancel anytime with zero hassle. Simply click the <strong>Manage Subscription</strong> link in our header or visit <a href="https://whop.com/hub/" style="color: var(--accent2);">Whop.com/hub</a>. Once signed in, you can terminate your plan in two clicks. Your Pro features will remain active until the end of your current billing period.
+        </p>
+      </div>
+      <div class="faq-item">
+        <h4 style="color: var(--accent); margin-bottom: 12px;">Where is my license key?</h4>
+        <p style="color: #94A3B8; font-size: 0.95rem; line-height: 1.6;">
+          After purchase, you will receive an automated email from Whop with your unique key. You can also find all your active keys in your <a href="https://whop.com/hub/" style="color: var(--accent2);">Whop Dashboard</a> under the "Software" tab.
+        </p>
+      </div>
+      <div class="faq-item">
+        <h4 style="color: var(--accent); margin-bottom: 12px;">Can I change my plan?</h4>
+        <p style="color: #94A3B8; font-size: 0.95rem; line-height: 1.6;">
+          Yes! You can upgrade from Solo to Pro at any time through the Management Portal. Your billing will be pro-rated automatically.
+        </p>
+      </div>
+    </div>
+  </section>
   <footer>
     <span>© 2026 The Redactor. Built for AI Product Development Course.</span>
     <span>Local-first · Privacy-first · Open source</span>

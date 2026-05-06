@@ -21,5 +21,8 @@
   "ga4_measurement_id": "G-S1MR2W37VM",
   "ga4_api_secret": "aMG4hFD9T7WvKZo6DEckSA",
   "ga4_client_id": "1dc2472b-6e62-47e2-816a-e26f59b7dd8f",
-  "mixpanel_token": "8f0e92980afd4b99f70e4e2a2b3f0839"
+  "mixpanel_token": "8f0e92980afd4b99f70e4e2a2b3f0839",
+  "license_key": "",
+  "license_tier": "Free",
+  "activation_token": ""
 }
